@@ -16,4 +16,7 @@ export interface JobStatus {
   progress: number;
   result?: string;
   error?: string;
+  createdAt?: string;   // 追加: ジョブ作成日時
+  updatedAt?: string;   // 追加: 最終更新日時
+  completedAt?: string; // 追加: ジョブ完了日時
 }

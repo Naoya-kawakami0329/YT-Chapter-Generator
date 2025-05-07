@@ -1,123 +1,326 @@
 import { NextResponse } from 'next/server';
-import { ProcessRequest, ProcessResponse } from '@/lib/types';
+import { ProcessRequest, JobStatus, ProcessStatus } from '@/lib/types';
 import YTDlpWrap from 'yt-dlp-wrap';
 import OpenAI from 'openai';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { updateJobStatus, storeJobResult, markJobAsError } from '@/lib/jobStore';
 
-// Initialize OpenAI client
+// Next.jsの設定
+// Note: output: exportとは互換性がないのでdynamicオプションを使用しない
+
+// 状態管理用のインメモリストレージ
+const jobStatuses = new Map();
+
+// OpenAI クライアントの初期化
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Initialize yt-dlp
-const ytDlp = new YTDlpWrap();
-
-// Create temp directory if it doesn't exist
-const tempDir = path.join(os.tmpdir(), 'yt-chapter-generator');
-if (!fs.existsSync(tempDir)) {
-  fs.mkdirSync(tempDir, { recursive: true });
+// yt-dlp の初期化
+let ytDlp: YTDlpWrap | undefined;
+try {
+  ytDlp = new YTDlpWrap();
+} catch (error) {
+  console.error('yt-dlp の初期化に失敗しました:', error);
 }
 
-export async function POST(request: Request) {
-  try {
-    const body: ProcessRequest = await request.json();
-    const { url, language } = body;
+// 一時ディレクトリの作成
+const tempDir = path.join(os.tmpdir(), 'yt-chapter-generator');
+try {
+  if (!fs.existsSync(tempDir)) {
+    fs.mkdirSync(tempDir, { recursive: true });
+  }
+} catch (error) {
+  console.error('一時ディレクトリの作成に失敗しました:', error);
+}
 
-    // Validate URL
-    if (!url || !url.includes('youtube.com/') && !url.includes('youtu.be/')) {
-      return NextResponse.json(
-        { error: 'Invalid YouTube URL' },
-        { status: 400 }
-      );
+// 共通のヘッダー設定
+const commonHeaders = {
+  'Content-Type': 'application/json',
+  'Cache-Control': 'no-store, no-cache, must-revalidate',
+};
+
+/**
+ * YouTube動画からチャプターを生成するAPIエンドポイント
+ */
+export async function POST(request: Request) {
+  let jobId = null;
+  let outputPath = null;
+
+  try {
+    // リクエストボディを解析
+    const body = await parseRequestBody(request);
+    if ('error' in body) {
+      return createErrorResponse(body.error, 400);
     }
 
-    // Generate a unique job ID
-    const jobId = `job-${Math.random().toString(36).substring(2, 11)}`;
-    const outputPath = path.join(tempDir, `${jobId}.mp3`);
+    const { url, language } = body;
 
-    // Start the download process
-    const downloadPromise = ytDlp.exec([
-      url,
-      '-x', // Extract audio
-      '--audio-format', 'mp3',
-      '--audio-quality', '0', // Best quality
-      '-o', outputPath,
-    ]);
+    // URLを検証
+    if (!isValidYoutubeUrl(url)) {
+      return createErrorResponse('無効なYouTube URLです', 400);
+    }
 
-    // Return initial response
-    const response: ProcessResponse = {
+    // ジョブIDを生成
+    jobId = generateJobId();
+    outputPath = path.join(tempDir, `${jobId}.mp3`);
+
+    // ジョブのステータスを初期化
+    const initialStatus: JobStatus = {
       jobId,
       status: 'downloading',
+      progress: 0,
     };
+    updateJobStatus(jobId, initialStatus);
+    console.log(`ジョブを初期化しました: ${jobId}`, initialStatus);
 
-    // Start processing in the background
-    processVideo(jobId, url, outputPath, language).catch(console.error);
+    // バックグラウンドで処理を開始
+    processVideoAsync(url, language, jobId, outputPath);
 
-    return NextResponse.json(response);
+    // 初期レスポンスを返す
+    return createResponse({
+      jobId,
+      status: 'downloading',
+    });
   } catch (error) {
-    console.error('Error processing request:', error);
-    return NextResponse.json(
-      { error: 'Failed to process request' },
-      { status: 500 }
+    console.error('リクエスト処理中にエラーが発生しました:', error);
+    
+    // 一時ファイルがあれば削除
+    cleanupTemporaryFile(outputPath);
+    
+    // エラーレスポンスを返す
+    return createErrorResponse(
+      error instanceof Error ? error.message : 'リクエストの処理に失敗しました',
+      500,
+      {
+        jobId: jobId || undefined,
+        details: error instanceof Error ? error.stack : undefined,
+      }
     );
   }
 }
 
-async function processVideo(jobId: string, url: string, audioPath: string, language: string) {
+/**
+ * ジョブのステータスを取得するエンドポイント
+ */
+export async function GET(
+  request: Request,
+  { params }: { params: { jobId: string } }
+) {
   try {
-    // Wait for download to complete
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    if (!params || !params.jobId) {
+      return createErrorResponse('ジョブIDが指定されていません', 400);
+    }
 
-    // Update status to transcribing
-    // In a real implementation, this would be stored in a database
-    console.log(`Job ${jobId}: Starting transcription`);
+    const jobId = params.jobId;
+    const status = jobStatuses.get(jobId);
 
-    // Read the audio file
+    if (!status) {
+      return createErrorResponse('ジョブが見つかりません', 404);
+    }
+
+    return createResponse(status);
+  } catch (error) {
+    console.error('ステータスAPI内でエラーが発生しました:', error);
+    return createErrorResponse(
+      'ジョブのステータス取得に失敗しました',
+      500,
+      {
+        details: error instanceof Error ? error.message : '不明なエラー',
+      }
+    );
+  }
+}
+
+/**
+ * リクエストボディを解析する
+ */
+async function parseRequestBody(request: Request) {
+  try {
+    return await request.json();
+  } catch (error) {
+    console.error('リクエストボディの解析に失敗しました:', error);
+    return { error: '無効なリクエストボディです' };
+  }
+}
+
+/**
+ * YouTube URLが有効かどうかを検証する
+ */
+function isValidYoutubeUrl(url: string): boolean {
+  if (!url) return false;
+  return url.includes('youtube.com/') || url.includes('youtu.be/');
+}
+
+/**
+ * 一意のジョブIDを生成する
+ */
+function generateJobId(): string {
+  return `job-${Math.random().toString(36).substring(2, 11)}`;
+}
+
+/**
+ * JSONレスポンスを作成する
+ */
+function createResponse(data: any, status = 200): Response {
+  return new Response(
+    JSON.stringify(data),
+    { 
+      status,
+      headers: commonHeaders,
+    }
+  );
+}
+
+/**
+ * エラーレスポンスを作成する
+ */
+function createErrorResponse(message: string, status = 500, additionalData = {}): Response {
+  return new Response(
+    JSON.stringify({ 
+      error: message,
+      ...additionalData,
+    }),
+    { 
+      status,
+      headers: commonHeaders,
+    }
+  );
+}
+
+/**
+ * 一時ファイルを削除する
+ */
+function cleanupTemporaryFile(filePath: string | null): void {
+  if (filePath && fs.existsSync(filePath)) {
+    try {
+      fs.unlinkSync(filePath);
+    } catch (error) {
+      console.error('一時ファイルの削除中にエラーが発生しました:', error);
+    }
+  }
+}
+
+/**
+ * バックグラウンドで動画を処理する
+ */
+function processVideoAsync(url: string, language: string, jobId: string, outputPath: string): void {
+  processVideo(url, language, jobId, outputPath).catch((error) => {
+    console.error(`ジョブ ${jobId} の処理中にエラーが発生しました:`, error);
+    if (jobId) {
+      markJobAsError(jobId, error instanceof Error ? error.message : '処理中にエラーが発生しました');
+    }
+  });
+}
+
+/**
+ * 動画を処理してチャプターを生成する
+ */
+async function processVideo(url: string, language: string, jobId: string, outputPath: string): Promise<void> {
+  try {
+    // YouTube動画をダウンロード
+    await downloadVideo(url, outputPath, jobId);
+
+    // 音声をトランスクリプション
+    const transcription = await transcribeAudio(outputPath, language, jobId);
+
+    // チャプターを生成
+    const chapters = generateChapters(transcription.text);
+
+    // 結果を保存
+    storeJobResult(jobId, chapters);
+
+    // 一時ファイルを削除
+    cleanupTemporaryFile(outputPath);
+  } catch (error) {
+    console.error(`ジョブ ${jobId} のビデオ処理中にエラーが発生しました:`, error);
+    markJobAsError(jobId, error instanceof Error ? error.message : '処理中にエラーが発生しました');
+    
+    // 一時ファイルを削除
+    cleanupTemporaryFile(outputPath);
+    
+    throw error;
+  }
+}
+
+/**
+ * YouTube動画をダウンロードする
+ */
+async function downloadVideo(url: string, outputPath: string, jobId: string): Promise<void> {
+  if (!ytDlp) {
+    throw new Error('yt-dlpが初期化されていません');
+  }
+
+  try {
+    await ytDlp.execPromise([
+      url,
+      '-x', // 音声を抽出
+      '--audio-format', 'mp3',
+      '--audio-quality', '0', // 最高品質
+      '-o', outputPath,
+    ]);
+    
+    updateJobStatus(jobId, {
+      status: 'transcribing',
+      progress: 30,
+    });
+  } catch (error) {
+    console.error('動画のダウンロード中にエラーが発生しました:', error);
+    throw new Error(`動画のダウンロードに失敗しました: ${error instanceof Error ? error.message : '不明なエラー'}`);
+  }
+}
+
+/**
+ * 音声ファイルをトランスクリプションする
+ */
+async function transcribeAudio(audioPath: string, language: string, jobId: string) {
+  try {
     const audioFile = fs.createReadStream(audioPath);
 
-    // Transcribe with Whisper
     const transcription = await openai.audio.transcriptions.create({
       file: audioFile,
       model: "whisper-1",
       language: language === 'auto' ? undefined : language,
     });
 
-    // Generate chapters based on transcription
-    // This is a simplified version - in a real implementation,
-    // you would use a more sophisticated algorithm to detect chapter boundaries
-    const chapters = generateChapters(transcription.text);
+    updateJobStatus(jobId, {
+      status: 'generating',
+      progress: 80,
+    });
 
-    // Clean up the temporary file
-    fs.unlinkSync(audioPath);
-
-    // Store the result
-    // In a real implementation, this would be stored in a database
-    console.log(`Job ${jobId}: Processing complete`, chapters);
-
+    return transcription;
   } catch (error) {
-    console.error(`Error processing job ${jobId}:`, error);
-    // In a real implementation, update the job status to 'error'
+    console.error('音声のトランスクリプション中にエラーが発生しました:', error);
+    throw new Error(`音声のトランスクリプションに失敗しました: ${error instanceof Error ? error.message : '不明なエラー'}`);
   }
 }
 
+/**
+ * テキストからチャプターを生成する
+ */
 function generateChapters(text: string): string {
-  // This is a simplified version - in a real implementation,
-  // you would use a more sophisticated algorithm to detect chapter boundaries
-  const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 0);
-  const chapters: string[] = [];
-  let currentTime = 0;
+  try {
+    // 文章に分割
+    const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 0);
+    const chapters: string[] = [];
+    let currentTime = 0;
 
-  for (let i = 0; i < sentences.length; i += 5) {
-    const chapterText = sentences.slice(i, i + 5).join('. ').trim();
-    if (chapterText) {
-      const minutes = Math.floor(currentTime / 60);
-      const seconds = currentTime % 60;
-      chapters.push(`${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')} ${chapterText}`);
-      currentTime += 30; // Assume each chapter is 30 seconds
+    // 文章をチャプターにグループ化
+    for (let i = 0; i < sentences.length; i += 5) {
+      const chapterText = sentences.slice(i, i + 5).join('. ').trim();
+      if (chapterText) {
+        const minutes = Math.floor(currentTime / 60);
+        const seconds = currentTime % 60;
+        chapters.push(`${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')} ${chapterText}`);
+        currentTime += 30; // 各チャプターは30秒と仮定
+      }
     }
-  }
 
-  return chapters.join('\n');
+    return chapters.join('\n');
+  } catch (error) {
+    console.error('チャプターの生成中にエラーが発生しました:', error);
+    throw new Error('チャプターの生成に失敗しました');
+  }
 }
