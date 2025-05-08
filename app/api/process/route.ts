@@ -7,8 +7,6 @@ import * as path from 'path';
 import * as os from 'os';
 import { updateJobStatus, storeJobResult, markJobAsError } from '@/lib/jobStore';
 
-// Next.jsの設定
-// Note: output: exportとは互換性がないのでdynamicオプションを使用しない
 
 // 状態管理用のインメモリストレージ
 const jobStatuses = new Map();
@@ -227,7 +225,7 @@ async function processVideo(url: string, language: string, jobId: string, output
     const transcription = await transcribeAudio(outputPath, language, jobId);
 
     // チャプターを生成
-    const chapters = generateChapters(transcription.text);
+    const chapters = await generateChapters(transcription);
 
     // 結果を保存
     storeJobResult(jobId, chapters);
@@ -283,6 +281,8 @@ async function transcribeAudio(audioPath: string, language: string, jobId: strin
       file: audioFile,
       model: "whisper-1",
       language: language === 'auto' ? undefined : language,
+      response_format: "verbose_json",
+      timestamp_granularities: ["word"],
     });
 
     updateJobStatus(jobId, {
@@ -300,22 +300,74 @@ async function transcribeAudio(audioPath: string, language: string, jobId: strin
 /**
  * テキストからチャプターを生成する
  */
-function generateChapters(text: string): string {
+async function generateChapters(transcription: any): Promise<string> {
   try {
-    // 文章に分割
-    const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 0);
-    const chapters: string[] = [];
-    let currentTime = 0;
+    // トランスクリプションの構造を確認
+    console.log('トランスクリプション構造:', JSON.stringify(transcription, null, 2));
 
-    // 文章をチャプターにグループ化
-    for (let i = 0; i < sentences.length; i += 5) {
-      const chapterText = sentences.slice(i, i + 5).join('. ').trim();
-      if (chapterText) {
-        const minutes = Math.floor(currentTime / 60);
-        const seconds = currentTime % 60;
-        chapters.push(`${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')} ${chapterText}`);
-        currentTime += 30; // 各チャプターは30秒と仮定
+    // 単語ごとのタイムスタンプを取得
+    const words = transcription.words || [];
+    if (words.length === 0) {
+      throw new Error('トランスクリプションに単語データが含まれていません');
+    }
+
+    // 文章の区切りを検出
+    const segments: { text: string; start: number; end: number }[] = [];
+    let currentSegment = { text: '', start: words[0].start, end: 0 };
+
+    for (const word of words) {
+      currentSegment.text += word.word + ' ';
+      currentSegment.end = word.end;
+
+      // 文末の句点や感嘆符で区切る
+      if (word.word.match(/[.!?]$/)) {
+        segments.push({
+          text: currentSegment.text.trim(),
+          start: currentSegment.start,
+          end: currentSegment.end
+        });
+        currentSegment = { text: '', start: word.end, end: word.end };
       }
+    }
+
+    // 最後のセグメントを追加
+    if (currentSegment.text.trim()) {
+      segments.push({
+        text: currentSegment.text.trim(),
+        start: currentSegment.start,
+        end: currentSegment.end
+      });
+    }
+
+    // セグメントをグループ化してチャプターを生成
+    const chapters: string[] = [];
+    let currentChapter = { text: '', start: 0, end: 0 };
+    let segmentCount = 0;
+
+    for (const segment of segments) {
+      currentChapter.text += segment.text + ' ';
+      currentChapter.end = segment.end;
+      segmentCount++;
+
+      // 5つのセグメントごとにチャプターを作成
+      if (segmentCount >= 5) {
+        const minutes = Math.floor(currentChapter.start / 60);
+        const seconds = Math.floor(currentChapter.start % 60);
+        chapters.push(
+          `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')} ${currentChapter.text.trim()}`
+        );
+        currentChapter = { text: '', start: segment.end, end: segment.end };
+        segmentCount = 0;
+      }
+    }
+
+    // 最後のチャプターを追加
+    if (currentChapter.text.trim()) {
+      const minutes = Math.floor(currentChapter.start / 60);
+      const seconds = Math.floor(currentChapter.start % 60);
+      chapters.push(
+        `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')} ${currentChapter.text.trim()}`
+      );
     }
 
     return chapters.join('\n');
