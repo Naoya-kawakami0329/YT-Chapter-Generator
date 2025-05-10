@@ -1,4 +1,4 @@
-"use client";
+'use client';
 
 import { useState, useEffect } from 'react';
 import { Toaster } from '@/components/ui/toaster';
@@ -30,8 +30,8 @@ export default function Home() {
         const response = await fetch(`/api/status/${jobId}`, {
           headers: {
             'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache'
-          }
+            Pragma: 'no-cache',
+          },
         });
         const data = await response.json();
 
@@ -45,13 +45,13 @@ export default function Home() {
         }
 
         console.log('ステータス更新:', data);
-        
+
         // ステータスとプログレスの更新
         if (data.status !== status) {
           console.log('ステータス変更:', status, '->', data.status);
           setStatus(data.status);
         }
-        
+
         if (data.progress !== progress) {
           console.log('プログレス更新:', progress, '->', data.progress);
           setProgress(data.progress);
@@ -151,37 +151,40 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-background flex flex-col">
       <Header />
-      
+
       <main className="flex-1 container mx-auto px-4 py-8">
         {status === 'idle' && (
           <div className="flex flex-col gap-8">
             <InputForm onSubmit={handleSubmit} />
           </div>
         )}
-        
+
         {status === 'done' && result && (
           <div className="flex flex-col gap-8">
             <InputForm onSubmit={handleSubmit} />
             <ResultsArea result={result} setResult={setResult} />
           </div>
         )}
-        
+
         {status === 'error' && (
           <div className="flex flex-col gap-8">
             <InputForm onSubmit={handleSubmit} />
           </div>
         )}
-        
+
         {['processing', 'downloading', 'transcribing', 'generating'].includes(status) && (
           <div className="h-full flex items-center justify-center">
             <ProgressModal status={status} progress={progress} />
           </div>
         )}
       </main>
-      
+
       <footer className="py-6 border-t border-border">
         <div className="container mx-auto px-4 text-center text-sm text-muted-foreground">
-          <p>© 2025 YT-Chapter-Generator | プライバシーは保護されます - 動画データは24時間後に自動削除されます</p>
+          <p>
+            © 2025 YT-Chapter-Generator | プライバシーは保護されます -
+            動画データは24時間後に自動削除されます
+          </p>
         </div>
       </footer>
       <Toaster />

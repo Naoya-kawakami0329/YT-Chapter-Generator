@@ -10,11 +10,7 @@ export const metadata: Metadata = {
   description: 'YouTube動画から自動的にチャプターを生成するツール',
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ja" suppressHydrationWarning>
       <body className={inter.className}>

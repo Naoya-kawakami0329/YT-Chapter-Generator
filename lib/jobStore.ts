@@ -35,7 +35,7 @@ class JobStore {
   public async updateJobStatus(jobId: string, status: Partial<JobStatus>) {
     try {
       console.log(`ジョブステータスを更新中: ${jobId}`, status);
-      const currentStatus = await this.storage.getJob(jobId) || {
+      const currentStatus = (await this.storage.getJob(jobId)) || {
         jobId,
         status: 'waiting' as ProcessStatus,
         progress: 0,
@@ -122,7 +122,10 @@ const jobStore = JobStore.getInstance();
 
 // 関数をエクスポート
 export const getJobStatus = (jobId: string) => jobStore.getJobStatus(jobId);
-export const updateJobStatus = (jobId: string, status: Partial<JobStatus>) => jobStore.updateJobStatus(jobId, status);
-export const storeJobResult = (jobId: string, result: string) => jobStore.storeJobResult(jobId, result);
-export const markJobAsError = (jobId: string, error: string) => jobStore.markJobAsError(jobId, error);
-export const getAllJobs = () => jobStore.getAllJobs(); 
+export const updateJobStatus = (jobId: string, status: Partial<JobStatus>) =>
+  jobStore.updateJobStatus(jobId, status);
+export const storeJobResult = (jobId: string, result: string) =>
+  jobStore.storeJobResult(jobId, result);
+export const markJobAsError = (jobId: string, error: string) =>
+  jobStore.markJobAsError(jobId, error);
+export const getAllJobs = () => jobStore.getAllJobs();

@@ -1,26 +1,32 @@
-"use client";
+'use client';
 
-import { useState } from "react";
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { InfoIcon } from "lucide-react";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useState } from 'react';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { InfoIcon } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 interface InputFormProps {
   onSubmit: (url: string, language: string) => void;
 }
 
 export default function InputForm({ onSubmit }: InputFormProps) {
-  const [url, setUrl] = useState("");
-  const [language, setLanguage] = useState("ja");
+  const [url, setUrl] = useState('');
+  const [language, setLanguage] = useState('ja');
   const [isLoading, setIsLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    
+
     try {
       if (url) {
         await onSubmit(url, language);
@@ -35,7 +41,7 @@ export default function InputForm({ onSubmit }: InputFormProps) {
       <div className="bg-card rounded-lg shadow-lg overflow-hidden transform transition-all hover:shadow-xl">
         <div className="p-6 md:p-8">
           <h2 className="text-2xl font-bold text-center mb-6">YouTube チャプター生成</h2>
-          
+
           <form onSubmit={handleSubmit} className="space-y-6">
             <div className="space-y-2">
               <div className="flex items-center justify-between">
@@ -46,7 +52,9 @@ export default function InputForm({ onSubmit }: InputFormProps) {
                       <InfoIcon className="h-4 w-4 text-muted-foreground" />
                     </TooltipTrigger>
                     <TooltipContent>
-                      <p className="max-w-xs">限定公開のURLも対応しています。最長2時間までの動画に対応しています。</p>
+                      <p className="max-w-xs">
+                        限定公開のURLも対応しています。最長2時間までの動画に対応しています。
+                      </p>
                     </TooltipContent>
                   </Tooltip>
                 </TooltipProvider>
@@ -60,7 +68,7 @@ export default function InputForm({ onSubmit }: InputFormProps) {
                 required
               />
             </div>
-            
+
             <div className="space-y-2">
               <Label htmlFor="language">言語</Label>
               <Select value={language} onValueChange={setLanguage}>
@@ -74,9 +82,9 @@ export default function InputForm({ onSubmit }: InputFormProps) {
                 </SelectContent>
               </Select>
             </div>
-            
-            <Button 
-              type="submit" 
+
+            <Button
+              type="submit"
               className="w-full bg-gradient-to-r from-red-600 to-red-500 hover:from-red-500 hover:to-red-400 transition-all"
               disabled={isLoading || !url}
             >

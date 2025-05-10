@@ -1,4 +1,4 @@
-export type ProcessStatus = 
+export type ProcessStatus =
   | 'idle'
   | 'waiting'
   | 'processing'

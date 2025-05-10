@@ -42,7 +42,7 @@ export class FileStorage {
       console.error('ジョブの保存中にエラーが発生しました:', {
         jobId,
         error: error instanceof Error ? error.message : '不明なエラー',
-        stack: error instanceof Error ? error.stack : undefined
+        stack: error instanceof Error ? error.stack : undefined,
       });
       throw error;
     }
@@ -67,7 +67,7 @@ export class FileStorage {
       console.error('ジョブの取得中にエラーが発生しました:', {
         jobId,
         error: error instanceof Error ? error.message : '不明なエラー',
-        stack: error instanceof Error ? error.stack : undefined
+        stack: error instanceof Error ? error.stack : undefined,
       });
       throw error;
     }
@@ -81,8 +81,8 @@ export class FileStorage {
       const files = await fs.readdir(this.storageDir);
       const jobs = await Promise.all(
         files
-          .filter(file => file.endsWith('.json'))
-          .map(async file => {
+          .filter((file) => file.endsWith('.json'))
+          .map(async (file) => {
             try {
               const data = await fs.readFile(path.join(this.storageDir, file), 'utf-8');
               return JSON.parse(data);
@@ -106,17 +106,17 @@ export class FileStorage {
   async cleanupOldJobs(): Promise<void> {
     try {
       const files = await fs.readdir(this.storageDir);
-      const jsonFiles = files.filter(file => file.endsWith('.json'));
+      const jsonFiles = files.filter((file) => file.endsWith('.json'));
       const now = Date.now();
       const oneDayMs = 24 * 60 * 60 * 1000;
-      
+
       await Promise.all(
         jsonFiles.map(async (file) => {
           try {
             const filePath = path.join(this.storageDir, file);
             const stats = await fs.stat(filePath);
             const fileAge = now - stats.mtimeMs;
-            
+
             // 24時間以上経過したファイルを削除
             if (fileAge > oneDayMs) {
               await fs.unlink(filePath);
@@ -141,9 +141,9 @@ export const storage = new FileStorage();
 export async function updateJobStatus(jobId: string, status: Partial<JobStatus>): Promise<void> {
   try {
     console.log('ジョブステータスを更新中:', { jobId, status });
-    
+
     // 既存のジョブを取得または新規作成
-    const currentStatus = await storage.getJob(jobId) || {
+    const currentStatus = (await storage.getJob(jobId)) || {
       jobId,
       status: 'waiting' as ProcessStatus,
       progress: 0,
@@ -166,7 +166,7 @@ export async function updateJobStatus(jobId: string, status: Partial<JobStatus>)
     console.error('ジョブステータスの更新中にエラーが発生しました:', {
       jobId,
       error: error instanceof Error ? error.message : '不明なエラー',
-      stack: error instanceof Error ? error.stack : undefined
+      stack: error instanceof Error ? error.stack : undefined,
     });
     throw error;
   }
@@ -193,15 +193,15 @@ export async function markJobAsError(jobId: string, error: string): Promise<void
 // Node.jsでサーバーが常時稼働している場合にのみ有効
 if (typeof setInterval !== 'undefined') {
   // 起動時に一度実行
-  storage.cleanupOldJobs().catch(err => 
-    console.error('初期クリーンアップ中にエラーが発生しました:', err)
-  );
-  
+  storage
+    .cleanupOldJobs()
+    .catch((err) => console.error('初期クリーンアップ中にエラーが発生しました:', err));
+
   // 12時間ごとに実行
   const CLEANUP_INTERVAL = 12 * 60 * 60 * 1000;
   setInterval(() => {
-    storage.cleanupOldJobs().catch(err => 
-      console.error('定期クリーンアップ中にエラーが発生しました:', err)
-    );
+    storage
+      .cleanupOldJobs()
+      .catch((err) => console.error('定期クリーンアップ中にエラーが発生しました:', err));
   }, CLEANUP_INTERVAL);
 }

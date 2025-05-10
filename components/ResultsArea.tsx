@@ -1,4 +1,4 @@
-"use client";
+'use client';
 
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
@@ -21,16 +21,16 @@ export default function ResultsArea({ result, setResult }: ResultsAreaProps) {
       await navigator.clipboard.writeText(result);
       setCopied(true);
       toast({
-        title: "コピーしました",
-        description: "チャプターがクリップボードにコピーされました。",
+        title: 'コピーしました',
+        description: 'チャプターがクリップボードにコピーされました。',
       });
-      
+
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
       toast({
-        title: "エラー",
-        description: "コピーに失敗しました。もう一度お試しください。",
-        variant: "destructive",
+        title: 'エラー',
+        description: 'コピーに失敗しました。もう一度お試しください。',
+        variant: 'destructive',
       });
     }
   };
@@ -45,10 +45,10 @@ export default function ResultsArea({ result, setResult }: ResultsAreaProps) {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    
+
     toast({
-      title: "ダウンロードしました",
-      description: "チャプターファイルがダウンロードされました。",
+      title: 'ダウンロードしました',
+      description: 'チャプターファイルがダウンロードされました。',
     });
   };
 
@@ -59,8 +59,8 @@ export default function ResultsArea({ result, setResult }: ResultsAreaProps) {
   const handleSave = () => {
     setIsEditing(false);
     toast({
-      title: "保存しました",
-      description: "チャプターの編集が保存されました。",
+      title: '保存しました',
+      description: 'チャプターの編集が保存されました。',
     });
   };
 
@@ -95,7 +95,7 @@ export default function ResultsArea({ result, setResult }: ResultsAreaProps) {
             </Button>
           </div>
         </div>
-        
+
         <Textarea
           value={result}
           onChange={(e) => setResult(e.target.value)}
@@ -103,12 +103,13 @@ export default function ResultsArea({ result, setResult }: ResultsAreaProps) {
           placeholder="チャプターが生成されるとここに表示されます..."
           readOnly={!isEditing}
         />
-        
+
         <p className="mt-4 text-sm text-muted-foreground">
           <span className="font-semibold">形式:</span> MM:SS チャプタータイトル
         </p>
         <p className="text-sm text-muted-foreground">
-          <span className="font-semibold">注意:</span> YouTubeの規定により、各チャプターは最低10秒以上、3章以上必要です。
+          <span className="font-semibold">注意:</span>{' '}
+          YouTubeの規定により、各チャプターは最低10秒以上、3章以上必要です。
         </p>
       </div>
     </div>

@@ -13,32 +13,29 @@ const commonHeaders = {
 /**
  * ジョブのステータスを取得するAPIエンドポイント
  */
-export async function GET(
-  request: Request,
-  { params }: { params: { jobId: string } }
-) {
+export async function GET(request: Request, context: any) {
   try {
-    const jobId = params.jobId;
+    const jobId = context?.params?.jobId;
     if (!jobId) {
       return NextResponse.json(
         { error: 'ジョブIDが指定されていません' },
-        { 
+        {
           status: 400,
-          headers: commonHeaders
+          headers: commonHeaders,
         }
       );
     }
 
     console.log('ジョブステータスを取得中:', jobId);
     const status = await getJobStatus(jobId);
-    
+
     if (!status) {
       console.log('ジョブが見つかりません:', jobId);
       return NextResponse.json(
         { error: 'ジョブが見つかりません' },
-        { 
+        {
           status: 404,
-          headers: commonHeaders
+          headers: commonHeaders,
         }
       );
     }
@@ -49,9 +46,9 @@ export async function GET(
     console.error('ステータス取得中にエラー:', error);
     return NextResponse.json(
       { error: 'ステータスの取得に失敗しました' },
-      { 
+      {
         status: 500,
-        headers: commonHeaders
+        headers: commonHeaders,
       }
     );
   }

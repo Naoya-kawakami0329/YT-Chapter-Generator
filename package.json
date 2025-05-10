@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "format": "prettier --write \"**/*.{js,jsx,ts,tsx,json,md}\""
   },
   "dependencies": {
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
@@ -71,5 +72,8 @@
     "vaul": "^0.9.9",
     "yt-dlp-wrap": "^2.3.12",
     "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "prettier": "^3.5.3"
   }
 }
