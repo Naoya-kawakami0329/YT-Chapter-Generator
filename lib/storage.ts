@@ -1,5 +1,5 @@
 // @/lib/storage.ts
-import fs from 'fs';
+import fs from 'fs/promises';
 import path from 'path';
 import { JobStatus } from '@/lib/types';
 
@@ -7,27 +7,37 @@ import { JobStatus } from '@/lib/types';
  * ファイルベースの永続的なストレージ実装
  * 注: 本番環境では、RedisやMongoDBなどの適切なデータベースを使用することを推奨します
  */
-class FileStorage {
-  private storagePath: string;
+export class FileStorage {
+  private storageDir: string;
 
   constructor() {
-    // データ保存用のディレクトリを作成
-    this.storagePath = path.join(process.cwd(), '.data');
-    if (!fs.existsSync(this.storagePath)) {
-      fs.mkdirSync(this.storagePath, { recursive: true });
+    this.storageDir = path.join(process.cwd(), 'data', 'jobs');
+    this.ensureStorageDir();
+  }
+
+  private async ensureStorageDir() {
+    try {
+      await fs.mkdir(this.storageDir, { recursive: true });
+    } catch (error) {
+      console.error('Error creating storage directory:', error);
+      throw error;
     }
+  }
+
+  private getJobFilePath(jobId: string): string {
+    return path.join(this.storageDir, `${jobId}.json`);
   }
 
   /**
    * ジョブデータを保存する
    */
-  async saveJob(jobId: string, data: JobStatus): Promise<void> {
-    const filePath = path.join(this.storagePath, `${jobId}.json`);
+  async saveJob(jobId: string, job: JobStatus): Promise<void> {
     try {
-      await fs.promises.writeFile(filePath, JSON.stringify(data, null, 2), 'utf8');
+      const filePath = this.getJobFilePath(jobId);
+      await fs.writeFile(filePath, JSON.stringify(job, null, 2), 'utf-8');
     } catch (error) {
-      console.error(`ジョブの保存中にエラーが発生しました (${jobId}):`, error);
-      throw new Error(`ジョブの保存に失敗しました: ${error instanceof Error ? error.message : '不明なエラー'}`);
+      console.error('Error saving job:', error);
+      throw error;
     }
   }
 
@@ -35,16 +45,16 @@ class FileStorage {
    * ジョブデータを取得する
    */
   async getJob(jobId: string): Promise<JobStatus | null> {
-    const filePath = path.join(this.storagePath, `${jobId}.json`);
     try {
-      if (!fs.existsSync(filePath)) {
-        return null;
-      }
-      const data = await fs.promises.readFile(filePath, 'utf8');
+      const filePath = this.getJobFilePath(jobId);
+      const data = await fs.readFile(filePath, 'utf-8');
       return JSON.parse(data);
     } catch (error) {
-      console.error(`ジョブの取得中にエラーが発生しました (${jobId}):`, error);
-      throw new Error(`ジョブの取得に失敗しました: ${error instanceof Error ? error.message : '不明なエラー'}`);
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return null;
+      }
+      console.error('Error reading job:', error);
+      throw error;
     }
   }
 
@@ -53,21 +63,24 @@ class FileStorage {
    */
   async getAllJobs(): Promise<JobStatus[]> {
     try {
-      const files = await fs.promises.readdir(this.storagePath);
-      const jsonFiles = files.filter(file => file.endsWith('.json'));
-      
+      const files = await fs.readdir(this.storageDir);
       const jobs = await Promise.all(
-        jsonFiles.map(async (file) => {
-          const jobId = path.basename(file, '.json');
-          const job = await this.getJob(jobId);
-          return job;
-        })
+        files
+          .filter(file => file.endsWith('.json'))
+          .map(async file => {
+            try {
+              const data = await fs.readFile(path.join(this.storageDir, file), 'utf-8');
+              return JSON.parse(data);
+            } catch (error) {
+              console.error(`Error reading job file ${file}:`, error);
+              return null;
+            }
+          })
       );
-      
       return jobs.filter((job): job is JobStatus => job !== null);
     } catch (error) {
-      console.error('全ジョブの取得中にエラーが発生しました:', error);
-      throw new Error(`全ジョブの取得に失敗しました: ${error instanceof Error ? error.message : '不明なエラー'}`);
+      console.error('Error getting all jobs:', error);
+      throw error;
     }
   }
 
@@ -77,26 +90,31 @@ class FileStorage {
    */
   async cleanupOldJobs(): Promise<void> {
     try {
-      const files = await fs.promises.readdir(this.storagePath);
+      const files = await fs.readdir(this.storageDir);
       const jsonFiles = files.filter(file => file.endsWith('.json'));
       const now = Date.now();
       const oneDayMs = 24 * 60 * 60 * 1000;
       
       await Promise.all(
         jsonFiles.map(async (file) => {
-          const filePath = path.join(this.storagePath, file);
-          const stats = await fs.promises.stat(filePath);
-          const fileAge = now - stats.mtimeMs;
-          
-          // 24時間以上経過したファイルを削除
-          if (fileAge > oneDayMs) {
-            await fs.promises.unlink(filePath);
-            console.log(`古いジョブを削除しました: ${file}`);
+          try {
+            const filePath = path.join(this.storageDir, file);
+            const stats = await fs.stat(filePath);
+            const fileAge = now - stats.mtimeMs;
+            
+            // 24時間以上経過したファイルを削除
+            if (fileAge > oneDayMs) {
+              await fs.unlink(filePath);
+              console.log(`古いジョブを削除しました: ${file}`);
+            }
+          } catch (error) {
+            console.error(`Error cleaning up job file ${file}:`, error);
           }
         })
       );
     } catch (error) {
-      console.error('ジョブのクリーンアップ中にエラーが発生しました:', error);
+      console.error('Error during cleanup:', error);
+      throw error;
     }
   }
 }
@@ -150,11 +168,15 @@ export async function markJobAsError(jobId: string, error: string): Promise<void
 // Node.jsでサーバーが常時稼働している場合にのみ有効
 if (typeof setInterval !== 'undefined') {
   // 起動時に一度実行
-  storage.cleanupOldJobs().catch(err => console.error('初期クリーンアップ中にエラーが発生しました:', err));
+  storage.cleanupOldJobs().catch(err => 
+    console.error('初期クリーンアップ中にエラーが発生しました:', err)
+  );
   
   // 12時間ごとに実行
   const CLEANUP_INTERVAL = 12 * 60 * 60 * 1000;
   setInterval(() => {
-    storage.cleanupOldJobs().catch(err => console.error('定期クリーンアップ中にエラーが発生しました:', err));
+    storage.cleanupOldJobs().catch(err => 
+      console.error('定期クリーンアップ中にエラーが発生しました:', err)
+    );
   }, CLEANUP_INTERVAL);
 }
