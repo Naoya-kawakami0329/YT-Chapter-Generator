@@ -423,12 +423,13 @@ async function transcribeAudio(audioPath: string, language: string, jobId: strin
             model: "whisper-1",
             language: language === 'auto' ? undefined : language,
             response_format: "verbose_json",
-            timestamp_granularities: ["word"],
+            timestamp_granularities: ["word", "segment"],
           });
 
           console.log(`チャンク${index + 1}のトランスクリプション完了:`, {
             textLength: transcription.text.length,
-            wordCount: transcription.words?.length || 0
+            wordCount: transcription.words?.length || 0,
+            segmentCount: transcription.segments?.length || 0
           });
 
           // 進捗を更新
@@ -449,12 +450,34 @@ async function transcribeAudio(audioPath: string, language: string, jobId: strin
     // チャンクを結合
     const combinedTranscription = {
       text: transcriptions.map(t => t.text).join(' '),
-      words: transcriptions.flatMap(t => t.words || []),
+      words: transcriptions.flatMap((t, chunkIndex) => {
+        // 各チャンクの単語を適切に結合
+        const words = t.words || [];
+        const chunkOffset = chunkIndex * 600; // 各チャンクは600秒
+        return words.map(word => ({
+          word: word.word.trim(),
+          start: Math.round((word.start + chunkOffset) * 100) / 100, // 小数点2桁まで
+          end: Math.round((word.end + chunkOffset) * 100) / 100
+        })).filter(word => word.word.length > 0);
+      }),
+      segments: transcriptions.flatMap((t, chunkIndex) => {
+        // 各チャンクのセグメントを適切に結合
+        const segments = t.segments || [];
+        const chunkOffset = chunkIndex * 600;
+        return segments.map(segment => ({
+          text: segment.text.trim(),
+          start: Math.round((segment.start + chunkOffset) * 100) / 100,
+          end: Math.round((segment.end + chunkOffset) * 100) / 100
+        }));
+      })
     };
 
     console.log('トランスクリプション完了:', {
       totalTextLength: combinedTranscription.text.length,
-      totalWordCount: combinedTranscription.words.length
+      totalWordCount: combinedTranscription.words.length,
+      totalSegmentCount: combinedTranscription.segments.length,
+      sampleWords: combinedTranscription.words.slice(0, 5),
+      sampleSegments: combinedTranscription.segments.slice(0, 3)
     });
 
     updateJobStatus(jobId, {
@@ -470,26 +493,130 @@ async function transcribeAudio(audioPath: string, language: string, jobId: strin
 }
 
 /**
+ * 動画の長さに基づいてチャプター数を決定する
+ */
+function determineChapterCount(durationInSeconds: number): { min: number; max: number; interval: number } {
+  const durationInMinutes = durationInSeconds / 60;
+  
+  if (durationInMinutes <= 15) {
+    return { min: 3, max: 5, interval: 4 }; // 3-5分間隔
+  } else if (durationInMinutes <= 30) {
+    return { min: 5, max: 8, interval: 4 }; // 3-4分間隔
+  } else if (durationInMinutes <= 60) {
+    return { min: 8, max: 12, interval: 5 }; // 4-5分間隔
+  } else if (durationInMinutes <= 120) {
+    return { min: 12, max: 20, interval: 6 }; // 5-7分間隔
+  } else {
+    return { min: 15, max: 30, interval: 7 }; // 6-8分間隔
+  }
+}
+
+/**
  * テキストからチャプターを生成する
  */
 async function generateChapters(transcription: any): Promise<string> {
   try {
     // トランスクリプションの構造を確認
-    console.log('トランスクリプション構造:', JSON.stringify(transcription, null, 2));
-
-    // 単語ごとのタイムスタンプを取得
-    const words = transcription.words || [];
-    if (words.length === 0) {
-      throw new Error('トランスクリプションに単語データが含まれていません');
+    if (!transcription || typeof transcription !== 'object') {
+      throw new Error('無効なトランスクリプションデータです');
     }
 
+    // セグメントと単語のデータを取得
+    const segments = transcription.segments || [];
+    const words = transcription.words || [];
+
+    if (!Array.isArray(segments) || segments.length === 0) {
+      throw new Error('トランスクリプションに有効なセグメントデータが含まれていません');
+    }
+
+    // 動画の総再生時間を取得（最後のセグメントの終了時間）
+    const totalDuration = Math.ceil(segments[segments.length - 1].end);
+    const { min: minChapters, max: maxChapters } = determineChapterCount(totalDuration);
+
+    console.log('動画の総再生時間:', formatTime(totalDuration));
+    console.log('チャプター設定:', { minChapters, maxChapters });
+
+    // セグメントを話題の区切りでグループ化
+    const topicGroups: { start: number; texts: string[]; segments: any[] }[] = [];
+    let currentGroup = { 
+      start: segments[0].start, 
+      texts: [segments[0].text],
+      segments: [segments[0]]
+    };
+
+    for (let i = 1; i < segments.length; i++) {
+      const currentSegment = segments[i];
+      const prevSegment = segments[i - 1];
+      
+      // セグメント間の間隔を計算
+      const gap = currentSegment.start - prevSegment.end;
+
+      // 5秒以上の間隔、または重要な話題の転換を示すキーワードがある場合に新しいグループを作成
+      const hasTopicChange = /(では|それでは|次に|ところで|さて|ということで|まとめ|結論|重要な|ポイント|注意点|最後に)/.test(currentSegment.text);
+      const hasLongGap = gap > 5;
+      
+      if (hasLongGap || hasTopicChange) {
+        if (currentGroup.texts.length > 0) {
+          topicGroups.push(currentGroup);
+        }
+        currentGroup = { 
+          start: currentSegment.start, 
+          texts: [currentSegment.text],
+          segments: [currentSegment]
+        };
+      } else {
+        currentGroup.texts.push(currentSegment.text);
+        currentGroup.segments.push(currentSegment);
+      }
+    }
+
+    // 最後のグループを追加
+    if (currentGroup.texts.length > 0) {
+      topicGroups.push(currentGroup);
+    }
+
+    // グループ数が多すぎる場合は、類似したグループをマージ
+    while (topicGroups.length > maxChapters) {
+      let minDuration = Infinity;
+      let mergeIndex = 0;
+
+      // 最も短い間隔のグループを見つける
+      for (let i = 0; i < topicGroups.length - 1; i++) {
+        const duration = topicGroups[i + 1].start - topicGroups[i].start;
+        if (duration < minDuration) {
+          minDuration = duration;
+          mergeIndex = i;
+        }
+      }
+
+      // グループをマージ
+      topicGroups[mergeIndex].texts = topicGroups[mergeIndex].texts.concat(topicGroups[mergeIndex + 1].texts);
+      topicGroups[mergeIndex].segments = topicGroups[mergeIndex].segments.concat(topicGroups[mergeIndex + 1].segments);
+      topicGroups.splice(mergeIndex + 1, 1);
+    }
+
+    console.log('話題グループ数:', topicGroups.length);
+
+    // グループ化されたセグメントを文字列に変換
+    const formattedSegments = topicGroups
+      .map((group, index) => {
+        const summary = group.texts.join(' ').slice(0, 100) + '...';
+        const startTime = Math.round(group.start * 100) / 100; // 小数点2桁まで
+        return `[${formatTime(startTime)}] ${summary}`;
+      })
+      .join('\n');
+
     // GPT-4にチャプター生成を依頼
-    const prompt = `以下の文字起こしから、話題の切れ目を検出して5〜15個のチャプターを生成してください。
+    const prompt = `以下の文字起こしから、重要な話題の切れ目を検出して${minChapters}〜${maxChapters}個のチャプターを生成してください。
 各チャプターは「MM:SS 章タイトル」の形式で、必ず00:00から始めてください。
-文字起こしの内容を要約し、重要なポイントを章タイトルとして抽出してください。
+文字起こしの内容を要約し、最も重要なポイントを章タイトルとして抽出してください。
+話題の転換点を重視して、自然な区切りでチャプターを設定してください。
+等間隔ではなく、内容の流れに沿ってチャプターを設定してください。
+細かい話題の変化は無視し、大きな話題の転換点のみをチャプターとして設定してください。
+各セグメントの開始時間を正確に使用してください。
 
 文字起こし:
-${transcription.text}
+${formattedSegments}
 
 チャプター形式:
 00:00 導入
@@ -499,15 +626,44 @@ MM:SS 章タイトル
     const completion = await openai.chat.completions.create({
       model: "gpt-4",
       messages: [
-        { role: "system", content: "あなたは動画のチャプターを生成する専門家です。" },
+        { 
+          role: "system", 
+          content: `あなたは動画のチャプターを生成する専門家です。
+各セグメントの開始時間を参考に、重要な話題の転換点を重視してチャプターを設定してください。
+必ず「MM:SS 章タイトル」の形式で出力してください。
+チャプター数は${minChapters}〜${maxChapters}個を目安に、内容の流れに沿って自然な区切りで設定してください。
+等間隔ではなく、話題の切れ目を重視してください。
+細かい話題の変化は無視し、大きな話題の転換点のみをチャプターとして設定してください。
+各セグメントの開始時間を正確に使用してください。` 
+        },
         { role: "user", content: prompt }
       ],
       temperature: 0.7,
+      max_tokens: 500,
     });
 
-    return completion.choices[0].message.content || '';
+    const result = completion.choices[0].message.content;
+    if (!result) {
+      throw new Error('GPT-4からの応答が空でした');
+    }
+
+    console.log('生成されたチャプター:', result);
+    return result;
   } catch (error) {
     console.error('チャプターの生成中にエラーが発生しました:', error);
-    throw new Error('チャプターの生成に失敗しました');
+    if (error instanceof Error) {
+      console.error('エラーの詳細:', error.message);
+      console.error('スタックトレース:', error.stack);
+    }
+    throw new Error(`チャプターの生成に失敗しました: ${error instanceof Error ? error.message : '不明なエラー'}`);
   }
+}
+
+/**
+ * 秒数をMM:SS形式に変換する
+ */
+function formatTime(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = Math.floor(seconds % 60);
+  return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
 }

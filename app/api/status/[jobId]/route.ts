@@ -23,35 +23,36 @@ export async function GET(
   { params }: { params: { jobId: string } }
 ) {
   try {
-    console.log('ステータス取得リクエスト:', params);
-
-    // パラメータを非同期で処理
-    const jobId = await Promise.resolve(params.jobId);
+    const jobId = params.jobId;
     
     if (!jobId) {
-      console.error('ジョブIDが指定されていません');
-      return createErrorResponse('ジョブIDが指定されていません', 400);
+      return NextResponse.json(
+        { error: 'ジョブIDが指定されていません' },
+        { status: 400 }
+      );
     }
 
     console.log('ジョブID:', jobId);
-
+    
     const status = getJobStatus(jobId);
     console.log('取得したステータス:', status);
 
     if (!status) {
-      console.error('ジョブが見つかりません:', jobId);
-      return createErrorResponse('ジョブが見つかりません', 404);
+      return NextResponse.json(
+        { error: 'ジョブが見つかりません' },
+        { status: 404 }
+      );
     }
 
-    return createResponse(status);
+    return NextResponse.json(status);
   } catch (error) {
     console.error('ステータスAPI内でエラーが発生しました:', error);
-    return createErrorResponse(
-      'ジョブのステータス取得に失敗しました',
-      500,
-      {
-        details: error instanceof Error ? error.message : '不明なエラー',
-      }
+    return NextResponse.json(
+      { 
+        error: 'ジョブのステータス取得に失敗しました',
+        details: error instanceof Error ? error.message : '不明なエラー'
+      },
+      { status: 500 }
     );
   }
 }
