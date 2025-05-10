@@ -70,11 +70,12 @@ export async function POST(request: Request) {
     outputPath = path.join(tempDir, `${jobId}.m4a`);
     wavPath = path.join(tempDir, `${jobId}.wav`);
 
-    // ジョブのステータスを初期化
+    // ジョブの初期状態を保存
     const initialStatus: JobStatus = {
       jobId,
-      status: 'downloading',
+      status: 'processing',
       progress: 0,
+      createdAt: new Date().toISOString(),
     };
     updateJobStatus(jobId, initialStatus);
     console.log(`ジョブを初期化しました: ${jobId}`, initialStatus);
@@ -153,8 +154,7 @@ async function parseRequestBody(request: Request) {
  * YouTube URLが有効かどうかを検証する
  */
 function isValidYoutubeUrl(url: string): boolean {
-  if (!url) return false;
-  return url.includes('youtube.com/') || url.includes('youtu.be/');
+  return url?.includes('youtube.com/') || url?.includes('youtu.be/');
 }
 
 /**
@@ -495,19 +495,19 @@ async function transcribeAudio(audioPath: string, language: string, jobId: strin
 /**
  * 動画の長さに基づいてチャプター数を決定する
  */
-function determineChapterCount(durationInSeconds: number): { min: number; max: number; interval: number } {
+function determineChapterCount(durationInSeconds: number): { min: number; max: number } {
   const durationInMinutes = durationInSeconds / 60;
   
   if (durationInMinutes <= 15) {
-    return { min: 3, max: 5, interval: 4 }; // 3-5分間隔
+    return { min: 3, max: 5 };
   } else if (durationInMinutes <= 30) {
-    return { min: 5, max: 8, interval: 4 }; // 3-4分間隔
+    return { min: 5, max: 8 };
   } else if (durationInMinutes <= 60) {
-    return { min: 8, max: 12, interval: 5 }; // 4-5分間隔
+    return { min: 8, max: 12 };
   } else if (durationInMinutes <= 120) {
-    return { min: 12, max: 20, interval: 6 }; // 5-7分間隔
+    return { min: 12, max: 20 };
   } else {
-    return { min: 15, max: 30, interval: 7 }; // 6-8分間隔
+    return { min: 15, max: 30 };
   }
 }
 

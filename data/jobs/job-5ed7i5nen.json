@@ -1,9 +1,0 @@
-{
-  "jobId": "job-5ed7i5nen",
-  "status": "error",
-  "progress": 50,
-  "createdAt": "2025-05-10T17:40:21.026Z",
-  "updatedAt": "2025-05-10T17:41:24.543Z",
-  "error": "音声のトランスクリプションに失敗しました: Connection error.",
-  "completedAt": "2025-05-10T17:46:14.893Z"
-}

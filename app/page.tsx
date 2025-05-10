@@ -153,17 +153,26 @@ export default function Home() {
       <Header />
       
       <main className="flex-1 container mx-auto px-4 py-8">
-        {(status === 'idle' || status === 'done' || status === 'error') && (
+        {status === 'idle' && (
           <div className="flex flex-col gap-8">
             <InputForm onSubmit={handleSubmit} />
-            
-            {status === 'done' && result && (
-              <ResultsArea result={result} setResult={setResult} />
-            )}
           </div>
         )}
         
-        {status !== 'idle' && status !== 'done' && status !== 'error' && (
+        {status === 'done' && result && (
+          <div className="flex flex-col gap-8">
+            <InputForm onSubmit={handleSubmit} />
+            <ResultsArea result={result} setResult={setResult} />
+          </div>
+        )}
+        
+        {status === 'error' && (
+          <div className="flex flex-col gap-8">
+            <InputForm onSubmit={handleSubmit} />
+          </div>
+        )}
+        
+        {['processing', 'downloading', 'transcribing', 'generating'].includes(status) && (
           <div className="h-full flex items-center justify-center">
             <ProgressModal status={status} progress={progress} />
           </div>

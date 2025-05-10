@@ -69,7 +69,7 @@ export default function InputForm({ onSubmit }: InputFormProps) {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="ja">日本語</SelectItem>
-                  <SelectItem value="en">英語</SelectItem>
+                  <SelectItem value="en">English</SelectItem>
                   <SelectItem value="auto">自動検出</SelectItem>
                 </SelectContent>
               </Select>

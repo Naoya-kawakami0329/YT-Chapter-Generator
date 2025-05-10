@@ -1,7 +1,7 @@
 // @/lib/storage.ts
 import fs from 'fs/promises';
 import path from 'path';
-import { JobStatus } from '@/lib/types';
+import { JobStatus, ProcessStatus } from '@/lib/types';
 
 /**
  * ファイルベースの永続的なストレージ実装
@@ -18,8 +18,9 @@ export class FileStorage {
   private async ensureStorageDir() {
     try {
       await fs.mkdir(this.storageDir, { recursive: true });
+      console.log('ストレージディレクトリを作成しました:', this.storageDir);
     } catch (error) {
-      console.error('Error creating storage directory:', error);
+      console.error('ストレージディレクトリの作成に失敗しました:', error);
       throw error;
     }
   }
@@ -34,9 +35,15 @@ export class FileStorage {
   async saveJob(jobId: string, job: JobStatus): Promise<void> {
     try {
       const filePath = this.getJobFilePath(jobId);
+      console.log('ジョブを保存中:', { jobId, filePath, job });
       await fs.writeFile(filePath, JSON.stringify(job, null, 2), 'utf-8');
+      console.log('ジョブの保存が完了しました:', jobId);
     } catch (error) {
-      console.error('Error saving job:', error);
+      console.error('ジョブの保存中にエラーが発生しました:', {
+        jobId,
+        error: error instanceof Error ? error.message : '不明なエラー',
+        stack: error instanceof Error ? error.stack : undefined
+      });
       throw error;
     }
   }
@@ -47,13 +54,21 @@ export class FileStorage {
   async getJob(jobId: string): Promise<JobStatus | null> {
     try {
       const filePath = this.getJobFilePath(jobId);
+      console.log('ジョブを取得中:', { jobId, filePath });
       const data = await fs.readFile(filePath, 'utf-8');
-      return JSON.parse(data);
+      const job = JSON.parse(data);
+      console.log('ジョブの取得が完了しました:', jobId);
+      return job;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        console.log('ジョブが見つかりません:', jobId);
         return null;
       }
-      console.error('Error reading job:', error);
+      console.error('ジョブの取得中にエラーが発生しました:', {
+        jobId,
+        error: error instanceof Error ? error.message : '不明なエラー',
+        stack: error instanceof Error ? error.stack : undefined
+      });
       throw error;
     }
   }
@@ -125,10 +140,12 @@ export const storage = new FileStorage();
 // ユーティリティ関数
 export async function updateJobStatus(jobId: string, status: Partial<JobStatus>): Promise<void> {
   try {
+    console.log('ジョブステータスを更新中:', { jobId, status });
+    
     // 既存のジョブを取得または新規作成
     const currentStatus = await storage.getJob(jobId) || {
       jobId,
-      status: 'waiting',
+      status: 'waiting' as ProcessStatus,
       progress: 0,
       createdAt: new Date().toISOString(),
     };
@@ -140,10 +157,18 @@ export async function updateJobStatus(jobId: string, status: Partial<JobStatus>)
       updatedAt: new Date().toISOString(),
     };
 
+    console.log('更新後のステータス:', updatedStatus);
+
     // 保存
     await storage.saveJob(jobId, updatedStatus);
+    console.log('ジョブステータスの更新が完了しました:', jobId);
   } catch (error) {
-    console.error(`ジョブステータスの更新中にエラーが発生しました (${jobId}):`, error);
+    console.error('ジョブステータスの更新中にエラーが発生しました:', {
+      jobId,
+      error: error instanceof Error ? error.message : '不明なエラー',
+      stack: error instanceof Error ? error.stack : undefined
+    });
+    throw error;
   }
 }
 
