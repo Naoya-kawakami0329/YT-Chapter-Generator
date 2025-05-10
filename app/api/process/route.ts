@@ -5,8 +5,11 @@ import OpenAI from 'openai';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import { updateJobStatus, storeJobResult, markJobAsError } from '@/lib/jobStore';
 
+const execAsync = promisify(exec);
 
 // 状態管理用のインメモリストレージ
 const jobStatuses = new Map();
@@ -46,6 +49,7 @@ const commonHeaders = {
 export async function POST(request: Request) {
   let jobId = null;
   let outputPath = null;
+  let wavPath = null;
 
   try {
     // リクエストボディを解析
@@ -63,7 +67,8 @@ export async function POST(request: Request) {
 
     // ジョブIDを生成
     jobId = generateJobId();
-    outputPath = path.join(tempDir, `${jobId}.mp3`);
+    outputPath = path.join(tempDir, `${jobId}.m4a`);
+    wavPath = path.join(tempDir, `${jobId}.wav`);
 
     // ジョブのステータスを初期化
     const initialStatus: JobStatus = {
@@ -75,7 +80,7 @@ export async function POST(request: Request) {
     console.log(`ジョブを初期化しました: ${jobId}`, initialStatus);
 
     // バックグラウンドで処理を開始
-    processVideoAsync(url, language, jobId, outputPath);
+    processVideoAsync(url, language, jobId, outputPath, wavPath);
 
     // 初期レスポンスを返す
     return createResponse({
@@ -85,8 +90,8 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error('リクエスト処理中にエラーが発生しました:', error);
     
-    // 一時ファイルがあれば削除
-    cleanupTemporaryFile(outputPath);
+    // 一時ファイルを削除
+    cleanupTemporaryFiles([outputPath, wavPath]);
     
     // エラーレスポンスを返す
     return createErrorResponse(
@@ -191,21 +196,23 @@ function createErrorResponse(message: string, status = 500, additionalData = {})
 /**
  * 一時ファイルを削除する
  */
-function cleanupTemporaryFile(filePath: string | null): void {
-  if (filePath && fs.existsSync(filePath)) {
-    try {
-      fs.unlinkSync(filePath);
-    } catch (error) {
-      console.error('一時ファイルの削除中にエラーが発生しました:', error);
+function cleanupTemporaryFiles(filePaths: (string | null)[]): void {
+  filePaths.forEach(filePath => {
+    if (filePath && fs.existsSync(filePath)) {
+      try {
+        fs.unlinkSync(filePath);
+      } catch (error) {
+        console.error('一時ファイルの削除中にエラーが発生しました:', error);
+      }
     }
-  }
+  });
 }
 
 /**
  * バックグラウンドで動画を処理する
  */
-function processVideoAsync(url: string, language: string, jobId: string, outputPath: string): void {
-  processVideo(url, language, jobId, outputPath).catch((error) => {
+function processVideoAsync(url: string, language: string, jobId: string, outputPath: string, wavPath: string): void {
+  processVideo(url, language, jobId, outputPath, wavPath).catch((error) => {
     console.error(`ジョブ ${jobId} の処理中にエラーが発生しました:`, error);
     if (jobId) {
       markJobAsError(jobId, error instanceof Error ? error.message : '処理中にエラーが発生しました');
@@ -216,13 +223,19 @@ function processVideoAsync(url: string, language: string, jobId: string, outputP
 /**
  * 動画を処理してチャプターを生成する
  */
-async function processVideo(url: string, language: string, jobId: string, outputPath: string): Promise<void> {
+async function processVideo(url: string, language: string, jobId: string, outputPath: string, wavPath: string): Promise<void> {
   try {
     // YouTube動画をダウンロード
     await downloadVideo(url, outputPath, jobId);
 
+    // 音声をWAV形式に変換
+    await convertToWav(outputPath, wavPath);
+
+    // 音声を分割
+    const chunks = await splitAudio(wavPath);
+
     // 音声をトランスクリプション
-    const transcription = await transcribeAudio(outputPath, language, jobId);
+    const transcription = await transcribeAudio(wavPath, language, jobId);
 
     // チャプターを生成
     const chapters = await generateChapters(transcription);
@@ -231,13 +244,13 @@ async function processVideo(url: string, language: string, jobId: string, output
     storeJobResult(jobId, chapters);
 
     // 一時ファイルを削除
-    cleanupTemporaryFile(outputPath);
+    cleanupTemporaryFiles([outputPath, wavPath]);
   } catch (error) {
     console.error(`ジョブ ${jobId} のビデオ処理中にエラーが発生しました:`, error);
     markJobAsError(jobId, error instanceof Error ? error.message : '処理中にエラーが発生しました');
     
     // 一時ファイルを削除
-    cleanupTemporaryFile(outputPath);
+    cleanupTemporaryFiles([outputPath, wavPath]);
     
     throw error;
   }
@@ -254,9 +267,7 @@ async function downloadVideo(url: string, outputPath: string, jobId: string): Pr
   try {
     await ytDlp.execPromise([
       url,
-      '-x', // 音声を抽出
-      '--audio-format', 'mp3',
-      '--audio-quality', '0', // 最高品質
+      '-f', 'ba[ext=m4a]', // 音声ストリームを取得
       '-o', outputPath,
     ]);
     
@@ -271,18 +282,179 @@ async function downloadVideo(url: string, outputPath: string, jobId: string): Pr
 }
 
 /**
+ * 音声ファイルをWAV形式に変換する
+ */
+async function convertToWav(inputPath: string, outputPath: string): Promise<void> {
+  try {
+    console.log('音声ファイルの変換を開始:', inputPath);
+    
+    // 入力ファイルの存在確認
+    if (!fs.existsSync(inputPath)) {
+      throw new Error(`入力ファイルが存在しません: ${inputPath}`);
+    }
+    
+    // 入力ファイルのサイズ確認
+    const inputStats = fs.statSync(inputPath);
+    console.log('入力ファイルサイズ:', inputStats.size, 'bytes');
+    
+    // ffmpegコマンドの実行
+    const command = `ffmpeg -y -i "${inputPath}" -ar 16000 -ac 1 -vn "${outputPath}"`;
+    console.log('実行コマンド:', command);
+    
+    const { stdout, stderr } = await execAsync(command);
+    console.log('変換完了:', { stdout, stderr });
+    
+    // 出力ファイルの確認
+    if (!fs.existsSync(outputPath)) {
+      throw new Error('変換後のファイルが存在しません');
+    }
+    
+    const outputStats = fs.statSync(outputPath);
+    console.log('変換後のファイルサイズ:', outputStats.size, 'bytes');
+    
+    if (outputStats.size === 0) {
+      throw new Error('変換後のファイルが空です');
+    }
+  } catch (error) {
+    console.error('音声ファイルの変換中にエラーが発生しました:', error);
+    throw new Error(`音声ファイルの変換に失敗しました: ${error instanceof Error ? error.message : '不明なエラー'}`);
+  }
+}
+
+/**
+ * 音声ファイルを分割する
+ */
+async function splitAudio(inputFile: string): Promise<string[]> {
+  try {
+    console.log('音声ファイルの分割を開始:', inputFile);
+    
+    // 入力ファイルの存在確認
+    if (!fs.existsSync(inputFile)) {
+      throw new Error('入力ファイルが見つかりません');
+    }
+
+    // 音声の長さを取得
+    const { stdout, stderr } = await execAsync(
+      `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${inputFile}"`
+    );
+
+    if (stderr) {
+      console.error('ffprobeエラー:', stderr);
+    }
+
+    if (!stdout) {
+      throw new Error('音声の長さを取得できませんでした');
+    }
+
+    const durationStr = stdout.toString().trim();
+    const duration = parseFloat(durationStr);
+
+    if (isNaN(duration) || duration <= 0) {
+      throw new Error(`無効な音声の長さが取得されました: ${durationStr}`);
+    }
+
+    console.log('音声の長さ:', duration, '秒');
+
+    // Whisper APIの制限（25MB）を考慮してチャンクサイズを調整
+    const CHUNK_SIZE = 600; // 10分
+    const chunks: string[] = [];
+    let startTime = 0;
+
+    while (startTime < duration) {
+      const chunkFile = path.join(os.tmpdir(), 'yt-chapter-generator', `chunk_${startTime}.wav`);
+      console.log(`チャンク生成中: ${startTime}秒から`);
+      
+      const command = `ffmpeg -y -i "${inputFile}" -ss ${startTime} -t ${CHUNK_SIZE} -ar 16000 -ac 1 -vn "${chunkFile}"`;
+      console.log('実行コマンド:', command);
+      
+      const { stdout: ffmpegStdout, stderr: ffmpegStderr } = await execAsync(command);
+      
+      if (ffmpegStderr) {
+        console.error('ffmpegエラー:', ffmpegStderr);
+      }
+      
+      // チャンクファイルのサイズを確認
+      const stats = fs.statSync(chunkFile);
+      console.log(`チャンク生成完了: ${chunkFile} (${stats.size} bytes)`);
+      
+      // 空のチャンクファイルを削除
+      if (stats.size === 0) {
+        fs.unlinkSync(chunkFile);
+        console.log('空のチャンクファイルを削除:', chunkFile);
+      } else {
+        chunks.push(chunkFile);
+      }
+      
+      startTime += CHUNK_SIZE;
+    }
+
+    if (chunks.length === 0) {
+      throw new Error('有効なチャンクが生成されませんでした');
+    }
+
+    console.log('分割完了:', chunks.length, '個のチャンクを生成');
+    return chunks;
+  } catch (error) {
+    console.error('音声ファイルの分割中にエラー:', error);
+    throw error;
+  }
+}
+
+/**
  * 音声ファイルをトランスクリプションする
  */
 async function transcribeAudio(audioPath: string, language: string, jobId: string) {
   try {
-    const audioFile = fs.createReadStream(audioPath);
+    console.log('トランスクリプション開始:', audioPath);
+    
+    // 音声ファイルを分割
+    const chunks = await splitAudio(audioPath);
+    console.log(`音声ファイルを${chunks.length}個のチャンクに分割しました`);
 
-    const transcription = await openai.audio.transcriptions.create({
-      file: audioFile,
-      model: "whisper-1",
-      language: language === 'auto' ? undefined : language,
-      response_format: "verbose_json",
-      timestamp_granularities: ["word"],
+    // 各チャンクを並列でトランスクリプション
+    const transcriptions = await Promise.all(
+      chunks.map(async (chunkPath, index) => {
+        console.log(`チャンク${index + 1}/${chunks.length}のトランスクリプション開始`);
+        const audioFile = fs.createReadStream(chunkPath);
+        
+        try {
+          const transcription = await openai.audio.transcriptions.create({
+            file: audioFile,
+            model: "whisper-1",
+            language: language === 'auto' ? undefined : language,
+            response_format: "verbose_json",
+            timestamp_granularities: ["word"],
+          });
+
+          console.log(`チャンク${index + 1}のトランスクリプション完了:`, {
+            textLength: transcription.text.length,
+            wordCount: transcription.words?.length || 0
+          });
+
+          // 進捗を更新
+          const progress = 30 + Math.floor((index + 1) / chunks.length * 50);
+          updateJobStatus(jobId, {
+            status: 'transcribing',
+            progress,
+          });
+
+          return transcription;
+        } catch (error) {
+          console.error(`チャンク${index + 1}のトランスクリプション中にエラー:`, error);
+          throw error;
+        }
+      })
+    );
+
+    // チャンクを結合
+    const combinedTranscription = {
+      text: transcriptions.map(t => t.text).join(' '),
+      words: transcriptions.flatMap(t => t.words || []),
+    };
+
+    console.log('トランスクリプション完了:', {
+      totalTextLength: combinedTranscription.text.length,
+      totalWordCount: combinedTranscription.words.length
     });
 
     updateJobStatus(jobId, {
@@ -290,7 +462,7 @@ async function transcribeAudio(audioPath: string, language: string, jobId: strin
       progress: 80,
     });
 
-    return transcription;
+    return combinedTranscription;
   } catch (error) {
     console.error('音声のトランスクリプション中にエラーが発生しました:', error);
     throw new Error(`音声のトランスクリプションに失敗しました: ${error instanceof Error ? error.message : '不明なエラー'}`);
@@ -311,66 +483,29 @@ async function generateChapters(transcription: any): Promise<string> {
       throw new Error('トランスクリプションに単語データが含まれていません');
     }
 
-    // 文章の区切りを検出
-    const segments: { text: string; start: number; end: number }[] = [];
-    let currentSegment = { text: '', start: words[0].start, end: 0 };
+    // GPT-4にチャプター生成を依頼
+    const prompt = `以下の文字起こしから、話題の切れ目を検出して5〜15個のチャプターを生成してください。
+各チャプターは「MM:SS 章タイトル」の形式で、必ず00:00から始めてください。
+文字起こしの内容を要約し、重要なポイントを章タイトルとして抽出してください。
 
-    for (const word of words) {
-      currentSegment.text += word.word + ' ';
-      currentSegment.end = word.end;
+文字起こし:
+${transcription.text}
 
-      // 文末の句点や感嘆符で区切る
-      if (word.word.match(/[.!?]$/)) {
-        segments.push({
-          text: currentSegment.text.trim(),
-          start: currentSegment.start,
-          end: currentSegment.end
-        });
-        currentSegment = { text: '', start: word.end, end: word.end };
-      }
-    }
+チャプター形式:
+00:00 導入
+MM:SS 章タイトル
+...`;
 
-    // 最後のセグメントを追加
-    if (currentSegment.text.trim()) {
-      segments.push({
-        text: currentSegment.text.trim(),
-        start: currentSegment.start,
-        end: currentSegment.end
-      });
-    }
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4",
+      messages: [
+        { role: "system", content: "あなたは動画のチャプターを生成する専門家です。" },
+        { role: "user", content: prompt }
+      ],
+      temperature: 0.7,
+    });
 
-    // セグメントをグループ化してチャプターを生成
-    const chapters: string[] = [];
-    let currentChapter = { text: '', start: 0, end: 0 };
-    let segmentCount = 0;
-
-    for (const segment of segments) {
-      currentChapter.text += segment.text + ' ';
-      currentChapter.end = segment.end;
-      segmentCount++;
-
-      // 5つのセグメントごとにチャプターを作成
-      if (segmentCount >= 5) {
-        const minutes = Math.floor(currentChapter.start / 60);
-        const seconds = Math.floor(currentChapter.start % 60);
-        chapters.push(
-          `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')} ${currentChapter.text.trim()}`
-        );
-        currentChapter = { text: '', start: segment.end, end: segment.end };
-        segmentCount = 0;
-      }
-    }
-
-    // 最後のチャプターを追加
-    if (currentChapter.text.trim()) {
-      const minutes = Math.floor(currentChapter.start / 60);
-      const seconds = Math.floor(currentChapter.start % 60);
-      chapters.push(
-        `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')} ${currentChapter.text.trim()}`
-      );
-    }
-
-    return chapters.join('\n');
+    return completion.choices[0].message.content || '';
   } catch (error) {
     console.error('チャプターの生成中にエラーが発生しました:', error);
     throw new Error('チャプターの生成に失敗しました');

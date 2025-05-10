@@ -9,74 +9,80 @@ export const dynamic = 'force-dynamic';
 // In a production environment, this should be replaced with a proper database
 const jobStatuses = new Map<string, JobStatus>();
 
+// 共通のヘッダー設定
+const commonHeaders = {
+  'Content-Type': 'application/json',
+  'Cache-Control': 'no-store, no-cache, must-revalidate',
+};
+
+/**
+ * ジョブのステータスを取得するAPIエンドポイント
+ */
 export async function GET(
   request: Request,
   { params }: { params: { jobId: string } }
 ) {
-  const headers = {
-    'Content-Type': 'application/json',
-    'Cache-Control': 'no-store, no-cache, must-revalidate',
-  };
-
   try {
-    // paramsを非同期で処理
-    const { jobId } = await Promise.resolve(params);
+    console.log('ステータス取得リクエスト:', params);
 
+    // パラメータを非同期で処理
+    const jobId = await Promise.resolve(params.jobId);
+    
     if (!jobId) {
       console.error('ジョブIDが指定されていません');
-      return new Response(
-        JSON.stringify({ 
-          error: 'ジョブIDが指定されていません',
-          details: 'リクエストにジョブIDが含まれていません。'
-        }),
-        { 
-          status: 400,
-          headers,
-        }
-      );
+      return createErrorResponse('ジョブIDが指定されていません', 400);
     }
 
-    console.log(`ジョブステータスを取得中: ${jobId}`);
-    console.log('現在のジョブ一覧:', getAllJobs());
-    
+    console.log('ジョブID:', jobId);
+
     const status = getJobStatus(jobId);
+    console.log('取得したステータス:', status);
 
     if (!status) {
-      console.error(`ジョブが見つかりません: ${jobId}`);
-      return new Response(
-        JSON.stringify({ 
-          error: 'ジョブが見つかりません',
-          jobId,
-          details: '指定されたジョブIDに対応するジョブが存在しません。'
-        }),
-        { 
-          status: 404,
-          headers,
-        }
-      );
+      console.error('ジョブが見つかりません:', jobId);
+      return createErrorResponse('ジョブが見つかりません', 404);
     }
 
-    console.log(`ジョブステータス取得成功: ${jobId}`, status);
-    return new Response(
-      JSON.stringify(status),
-      { 
-        status: 200,
-        headers,
-      }
-    );
+    return createResponse(status);
   } catch (error) {
-    console.error('Error in status API:', error);
-    return new Response(
-      JSON.stringify({ 
-        error: 'ジョブのステータス取得に失敗しました',
+    console.error('ステータスAPI内でエラーが発生しました:', error);
+    return createErrorResponse(
+      'ジョブのステータス取得に失敗しました',
+      500,
+      {
         details: error instanceof Error ? error.message : '不明なエラー',
-      }),
-      { 
-        status: 500,
-        headers,
       }
     );
   }
+}
+
+/**
+ * JSONレスポンスを作成する
+ */
+function createResponse(data: any, status = 200): Response {
+  return new Response(
+    JSON.stringify(data),
+    { 
+      status,
+      headers: commonHeaders,
+    }
+  );
+}
+
+/**
+ * エラーレスポンスを作成する
+ */
+function createErrorResponse(message: string, status = 500, additionalData = {}): Response {
+  return new Response(
+    JSON.stringify({ 
+      error: message,
+      ...additionalData,
+    }),
+    { 
+      status,
+      headers: commonHeaders,
+    }
+  );
 }
 
 // Helper function to update job status

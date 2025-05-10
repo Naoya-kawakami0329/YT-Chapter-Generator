@@ -14,54 +14,40 @@ export default function Home() {
   const [progress, setProgress] = useState(0);
   const [result, setResult] = useState<string>('');
   const [jobId, setJobId] = useState<string>('');
+  const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
 
   const checkJobStatus = async (jobId: string) => {
     try {
+      console.log('ジョブステータスを確認中:', jobId);
       const response = await fetch(`/api/status/${jobId}`);
+      const data = await response.json();
       
-      // デバッグ用：レスポンスの詳細をログ出力
-      console.log('Response headers:', Object.fromEntries(response.headers.entries()));
-      const responseText = await response.text();
-      console.log('Response body:', responseText);
+      console.log('ステータスレスポンス:', {
+        status: response.status,
+        ok: response.ok,
+        data
+      });
 
-      let data;
-      try {
-        data = JSON.parse(responseText);
-      } catch (parseError) {
-        console.error('JSON parse error:', parseError);
-        console.error('実際のレスポンス:', responseText.substring(0, 200));
-        throw new Error('サーバーからの応答の解析に失敗しました');
-      }
-      
       if (!response.ok) {
         throw new Error(data.error || 'ステータスの取得に失敗しました');
       }
 
       setStatus(data.status);
-      setProgress(data.progress);
-      
+      setProgress(data.progress || 0);
+
       if (data.status === 'done' && data.result) {
         setResult(data.result);
-      } else if (data.status === 'error') {
-        toast({
-          title: "エラーが発生しました",
-          description: data.error || "処理中にエラーが発生しました。",
-          variant: "destructive",
-        });
-        setStatus('error');
-      } else if (data.status !== 'done' && data.status !== 'error') {
-        // Continue polling if the job is still processing
+        setError(null);
+      } else if (data.status === 'error' && data.error) {
+        setError(data.error);
+      } else if (['downloading', 'transcribing', 'generating'].includes(data.status)) {
+        // 処理中の場合は再度チェック
         setTimeout(() => checkJobStatus(jobId), 2000);
       }
     } catch (error) {
-      console.error('Error checking job status:', error);
-      toast({
-        title: "エラーが発生しました",
-        description: error instanceof Error ? error.message : "ステータスの確認中にエラーが発生しました。",
-        variant: "destructive",
-      });
-      setStatus('error');
+      console.error('ステータスチェック中にエラー:', error);
+      setError(error instanceof Error ? error.message : 'ステータスの確認中にエラーが発生しました');
     }
   };
 
