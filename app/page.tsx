@@ -30,18 +30,25 @@ export default function Home() {
         const response = await fetch(`/api/status/${jobId}`, {
           headers: {
             'Cache-Control': 'no-cache',
-            Pragma: 'no-cache',
+            'Pragma': 'no-cache',
+            'Accept': 'application/json',
           },
         });
-        const data = await response.json();
+
+        let data;
+        const contentType = response.headers.get('content-type');
+        
+        try {
+          data = await response.json();
+        } catch (parseError) {
+          console.error('JSONパースエラー:', parseError);
+          throw new Error('サーバーからの応答が不正な形式です');
+        }
 
         if (!response.ok) {
-          if (response.status === 404 && retryCount < MAX_RETRIES) {
-            console.log(`ジョブが見つかりません。リトライ ${retryCount + 1}/${MAX_RETRIES}`);
-            retryCount++;
-            return;
-          }
-          throw new Error(data.error || 'ステータスの取得に失敗しました');
+          const errorMessage = data?.error || 'ステータスの取得に失敗しました';
+          const errorDetails = data?.details || '';
+          throw new Error(`${errorMessage}${errorDetails ? `: ${errorDetails}` : ''}`);
         }
 
         console.log('ステータス更新:', data);

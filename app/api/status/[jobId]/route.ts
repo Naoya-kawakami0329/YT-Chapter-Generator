@@ -15,8 +15,10 @@ const commonHeaders = {
  */
 export async function GET(request: Request, context: any) {
   try {
+    // パラメータの検証
     const jobId = context?.params?.jobId;
     if (!jobId) {
+      console.error('ジョブIDが指定されていません');
       return NextResponse.json(
         { error: 'ジョブIDが指定されていません' },
         {
@@ -27,25 +29,43 @@ export async function GET(request: Request, context: any) {
     }
 
     console.log('ジョブステータスを取得中:', jobId);
-    const status = await getJobStatus(jobId);
+    
+    try {
+      const status = await getJobStatus(jobId);
+      
+      if (!status) {
+        console.log('ジョブが見つかりません:', jobId);
+        return NextResponse.json(
+          { error: 'ジョブが見つかりません' },
+          {
+            status: 404,
+            headers: commonHeaders,
+          }
+        );
+      }
 
-    if (!status) {
-      console.log('ジョブが見つかりません:', jobId);
+      console.log('ジョブステータス取得成功:', status);
+      return NextResponse.json(status, { headers: commonHeaders });
+    } catch (dbError) {
+      console.error('データベースアクセスエラー:', dbError);
       return NextResponse.json(
-        { error: 'ジョブが見つかりません' },
+        { 
+          error: 'データベースアクセスエラー',
+          details: dbError instanceof Error ? dbError.message : '不明なエラー'
+        },
         {
-          status: 404,
+          status: 500,
           headers: commonHeaders,
         }
       );
     }
-
-    console.log('ジョブステータス取得成功:', status);
-    return NextResponse.json(status, { headers: commonHeaders });
   } catch (error) {
     console.error('ステータス取得中にエラー:', error);
     return NextResponse.json(
-      { error: 'ステータスの取得に失敗しました' },
+      { 
+        error: 'ステータスの取得に失敗しました',
+        details: error instanceof Error ? error.message : '不明なエラー'
+      },
       {
         status: 500,
         headers: commonHeaders,

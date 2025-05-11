@@ -1,12 +1,11 @@
 import { JobStatus, ProcessStatus } from './types';
-import { FileStorage } from './storage';
 
 class JobStore {
   private static instance: JobStore;
-  private storage: FileStorage;
+  private jobs: Map<string, JobStatus>;
 
   private constructor() {
-    this.storage = new FileStorage();
+    this.jobs = new Map();
   }
 
   public static getInstance(): JobStore {
@@ -19,7 +18,7 @@ class JobStore {
   // ジョブの状態を取得
   public async getJobStatus(jobId: string): Promise<JobStatus | null> {
     try {
-      const status = await this.storage.getJob(jobId);
+      const status = this.jobs.get(jobId);
       if (!status) {
         console.log(`ジョブが見つかりません: ${jobId}`);
         return null;
@@ -35,7 +34,7 @@ class JobStore {
   public async updateJobStatus(jobId: string, status: Partial<JobStatus>) {
     try {
       console.log(`ジョブステータスを更新中: ${jobId}`, status);
-      const currentStatus = (await this.storage.getJob(jobId)) || {
+      const currentStatus = this.jobs.get(jobId) || {
         jobId,
         status: 'waiting' as ProcessStatus,
         progress: 0,
@@ -48,7 +47,7 @@ class JobStore {
         updatedAt: new Date().toISOString(),
       };
 
-      await this.storage.saveJob(jobId, updatedStatus);
+      this.jobs.set(jobId, updatedStatus);
       console.log(`ジョブステータス更新完了: ${jobId}`, updatedStatus);
       return updatedStatus;
     } catch (error) {
@@ -61,7 +60,7 @@ class JobStore {
   public async storeJobResult(jobId: string, result: string) {
     try {
       console.log(`ジョブ結果を保存中: ${jobId}`);
-      const status = await this.storage.getJob(jobId);
+      const status = this.jobs.get(jobId);
       if (!status) {
         throw new Error(`ジョブが見つかりません（結果保存）: ${jobId}`);
       }
@@ -73,7 +72,7 @@ class JobStore {
         result,
         completedAt: new Date().toISOString(),
       };
-      await this.storage.saveJob(jobId, updatedStatus);
+      this.jobs.set(jobId, updatedStatus);
       console.log(`ジョブ結果保存完了: ${jobId}`, updatedStatus);
       return updatedStatus;
     } catch (error) {
@@ -86,7 +85,7 @@ class JobStore {
   public async markJobAsError(jobId: string, error: string) {
     try {
       console.log(`ジョブをエラー状態に設定中: ${jobId}`, error);
-      const status = await this.storage.getJob(jobId);
+      const status = this.jobs.get(jobId);
       if (!status) {
         throw new Error(`ジョブが見つかりません（エラー設定）: ${jobId}`);
       }
@@ -97,7 +96,7 @@ class JobStore {
         error,
         completedAt: new Date().toISOString(),
       };
-      await this.storage.saveJob(jobId, updatedStatus);
+      this.jobs.set(jobId, updatedStatus);
       console.log(`ジョブエラー状態設定完了: ${jobId}`, updatedStatus);
       return updatedStatus;
     } catch (error) {
@@ -108,12 +107,7 @@ class JobStore {
 
   // 現在のジョブ一覧を取得
   public async getAllJobs(): Promise<JobStatus[]> {
-    try {
-      return await this.storage.getAllJobs();
-    } catch (error) {
-      console.error('Error getting all jobs:', error);
-      return [];
-    }
+    return Array.from(this.jobs.values());
   }
 }
 
