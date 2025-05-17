@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { ProcessRequest, JobStatus, ProcessStatus } from '@/lib/types';
 import YTDlpWrap from 'yt-dlp-wrap';
+import { path as ytDlpPath } from 'yt-dlp-exec';
 import OpenAI from 'openai';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -19,14 +20,6 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// yt-dlp の初期化
-let ytDlp: YTDlpWrap | undefined;
-try {
-  ytDlp = new YTDlpWrap();
-} catch (error) {
-  console.error('yt-dlp の初期化に失敗しました:', error);
-}
-
 // 一時ディレクトリの作成
 const tempDir = path.join(os.tmpdir(), 'yt-chapter-generator');
 try {
@@ -35,6 +28,20 @@ try {
   }
 } catch (error) {
   console.error('一時ディレクトリの作成に失敗しました:', error);
+}
+
+// yt-dlp の初期化
+let ytDlp: YTDlpWrap | undefined;
+async function initYtDlp() {
+  if (!ytDlp) {
+    try {
+      ytDlp = new YTDlpWrap(ytDlpPath);
+      console.log('yt-dlp を初期化しました:', ytDlpPath);
+    } catch (error) {
+      console.error('yt-dlp の初期化に失敗しました:', error);
+    }
+  }
+  return ytDlp;
 }
 
 // 共通のヘッダー設定
@@ -225,6 +232,9 @@ async function processVideo(
  * YouTube動画をダウンロードする
  */
 async function downloadVideo(url: string, outputPath: string, jobId: string): Promise<void> {
+  if (!ytDlp) {
+    await initYtDlp();
+  }
   if (!ytDlp) {
     throw new Error('yt-dlpが初期化されていません');
   }
