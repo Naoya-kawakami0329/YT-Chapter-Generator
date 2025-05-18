@@ -1,31 +1,20 @@
 import { NextResponse } from 'next/server';
 import { ProcessRequest, JobStatus, ProcessStatus } from '@/lib/types';
-import YTDlpWrap from 'yt-dlp-wrap';
 import OpenAI from 'openai';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import axios from 'axios';
 import { updateJobStatus, storeJobResult, markJobAsError } from '@/lib/jobStore';
-
-const execAsync = promisify(exec);
-
-// 状態管理用のインメモリストレージ
-const jobStatuses = new Map();
 
 // OpenAI クライアントの初期化
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// yt-dlp の初期化
-let ytDlp: YTDlpWrap | undefined;
-try {
-  ytDlp = new YTDlpWrap();
-} catch (error) {
-  console.error('yt-dlp の初期化に失敗しました:', error);
-}
+// RapidAPI の設定
+const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
+const RAPIDAPI_HOST = 'youtube-transcript3.p.rapidapi.com';
 
 // 一時ディレクトリの作成
 const tempDir = path.join(os.tmpdir(), 'yt-chapter-generator');
@@ -48,8 +37,6 @@ const commonHeaders = {
  */
 export async function POST(request: Request) {
   let jobId = null;
-  let outputPath = null;
-  let wavPath = null;
 
   try {
     const body = await parseRequestBody(request);
@@ -64,8 +51,6 @@ export async function POST(request: Request) {
     }
 
     jobId = generateJobId();
-    outputPath = path.join(tempDir, `${jobId}.m4a`);
-    wavPath = path.join(tempDir, `${jobId}.wav`);
 
     const initialStatus: JobStatus = {
       jobId,
@@ -75,15 +60,14 @@ export async function POST(request: Request) {
     };
     updateJobStatus(jobId, initialStatus);
 
-    processVideoAsync(url, language, jobId, outputPath, wavPath);
+    processVideoAsync(url, language, jobId);
 
     return createResponse({
       jobId,
-      status: 'downloading',
+      status: 'processing',
     });
   } catch (error) {
     console.error('リクエスト処理中にエラーが発生しました:', error);
-    cleanupTemporaryFiles([outputPath, wavPath]);
     return createErrorResponse(
       error instanceof Error ? error.message : 'リクエストの処理に失敗しました',
       500,
@@ -144,31 +128,10 @@ function createErrorResponse(message: string, status = 500, additionalData = {})
 }
 
 /**
- * 一時ファイルを削除する
- */
-function cleanupTemporaryFiles(filePaths: (string | null)[]): void {
-  filePaths.forEach((filePath) => {
-    if (filePath && fs.existsSync(filePath)) {
-      try {
-        fs.unlinkSync(filePath);
-      } catch (error) {
-        console.error('一時ファイルの削除中にエラーが発生しました:', error);
-      }
-    }
-  });
-}
-
-/**
  * バックグラウンドで動画を処理する
  */
-function processVideoAsync(
-  url: string,
-  language: string,
-  jobId: string,
-  outputPath: string,
-  wavPath: string
-): void {
-  processVideo(url, language, jobId, outputPath, wavPath).catch((error) => {
+function processVideoAsync(url: string, language: string, jobId: string): void {
+  processVideo(url, language, jobId).catch((error) => {
     console.error(`ジョブ ${jobId} の処理中にエラーが発生しました:`, error);
     if (jobId) {
       markJobAsError(
@@ -182,25 +145,10 @@ function processVideoAsync(
 /**
  * 動画を処理してチャプターを生成する
  */
-async function processVideo(
-  url: string,
-  language: string,
-  jobId: string,
-  outputPath: string,
-  wavPath: string
-): Promise<void> {
+async function processVideo(url: string, language: string, jobId: string): Promise<void> {
   try {
-    // YouTube動画をダウンロード
-    await downloadVideo(url, outputPath, jobId);
-
-    // 音声をWAV形式に変換
-    await convertToWav(outputPath, wavPath);
-
-    // 音声を分割
-    const chunks = await splitAudio(wavPath);
-
-    // 音声をトランスクリプション
-    const transcription = await transcribeAudio(wavPath, language, jobId);
+    // YouTube動画の字幕を取得
+    const transcription = await getYouTubeTranscript(url, language, jobId);
 
     // チャプターを生成
     const chapters = await generateChapters(transcription);
@@ -208,263 +156,89 @@ async function processVideo(
     // 結果を保存
     storeJobResult(jobId, chapters);
 
-    // 一時ファイルを削除
-    cleanupTemporaryFiles([outputPath, wavPath]);
   } catch (error) {
     console.error(`ジョブ ${jobId} のビデオ処理中にエラーが発生しました:`, error);
     markJobAsError(jobId, error instanceof Error ? error.message : '処理中にエラーが発生しました');
-
-    // 一時ファイルを削除
-    cleanupTemporaryFiles([outputPath, wavPath]);
-
     throw error;
   }
 }
 
 /**
- * YouTube動画をダウンロードする
+ * YouTube動画の字幕を取得する
  */
-async function downloadVideo(url: string, outputPath: string, jobId: string): Promise<void> {
-  if (!ytDlp) {
-    throw new Error('yt-dlpが初期化されていません');
-  }
-
+async function getYouTubeTranscript(url: string, language: string, jobId: string) {
   try {
-    await ytDlp.execPromise([
-      url,
-      '-f',
-      'ba[ext=m4a]', // 音声ストリームを取得
-      '-o',
-      outputPath,
-    ]);
+    console.log('字幕の取得を開始:', url);
 
-    updateJobStatus(jobId, {
-      status: 'transcribing',
-      progress: 30,
-    });
-  } catch (error) {
-    console.error('動画のダウンロード中にエラーが発生しました:', error);
-    throw new Error(
-      `動画のダウンロードに失敗しました: ${error instanceof Error ? error.message : '不明なエラー'}`
-    );
-  }
-}
-
-/**
- * 音声ファイルをWAV形式に変換する
- */
-async function convertToWav(inputPath: string, outputPath: string): Promise<void> {
-  try {
-    console.log('音声ファイルの変換を開始:', inputPath);
-
-    // 入力ファイルの存在確認
-    if (!fs.existsSync(inputPath)) {
-      throw new Error(`入力ファイルが存在しません: ${inputPath}`);
+    // ビデオIDを抽出
+    const videoId = extractVideoId(url);
+    if (!videoId) {
+      throw new Error('無効なYouTube URLです');
     }
 
-    // 入力ファイルのサイズ確認
-    const inputStats = fs.statSync(inputPath);
-    console.log('入力ファイルサイズ:', inputStats.size, 'bytes');
-
-    // ffmpegコマンドの実行
-    const command = `ffmpeg -y -i "${inputPath}" -ar 16000 -ac 1 -vn "${outputPath}"`;
-    console.log('実行コマンド:', command);
-
-    const { stdout, stderr } = await execAsync(command);
-    console.log('変換完了:', { stdout, stderr });
-
-    // 出力ファイルの確認
-    if (!fs.existsSync(outputPath)) {
-      throw new Error('変換後のファイルが存在しません');
-    }
-
-    const outputStats = fs.statSync(outputPath);
-    console.log('変換後のファイルサイズ:', outputStats.size, 'bytes');
-
-    if (outputStats.size === 0) {
-      throw new Error('変換後のファイルが空です');
-    }
-  } catch (error) {
-    console.error('音声ファイルの変換中にエラーが発生しました:', error);
-    throw new Error(
-      `音声ファイルの変換に失敗しました: ${error instanceof Error ? error.message : '不明なエラー'}`
-    );
-  }
-}
-
-/**
- * 音声ファイルを分割する
- */
-async function splitAudio(inputFile: string): Promise<string[]> {
-  try {
-    console.log('音声ファイルの分割を開始:', inputFile);
-
-    // 入力ファイルの存在確認
-    if (!fs.existsSync(inputFile)) {
-      throw new Error('入力ファイルが見つかりません');
-    }
-
-    // 音声の長さを取得
-    const { stdout, stderr } = await execAsync(
-      `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${inputFile}"`
-    );
-
-    if (stderr) {
-      console.error('ffprobeエラー:', stderr);
-    }
-
-    if (!stdout) {
-      throw new Error('音声の長さを取得できませんでした');
-    }
-
-    const durationStr = stdout.toString().trim();
-    const duration = parseFloat(durationStr);
-
-    if (isNaN(duration) || duration <= 0) {
-      throw new Error(`無効な音声の長さが取得されました: ${durationStr}`);
-    }
-
-    console.log('音声の長さ:', duration, '秒');
-
-    // Whisper APIの制限（25MB）を考慮してチャンクサイズを調整
-    const CHUNK_SIZE = 600; // 10分
-    const chunks: string[] = [];
-    let startTime = 0;
-
-    while (startTime < duration) {
-      const chunkFile = path.join(os.tmpdir(), 'yt-chapter-generator', `chunk_${startTime}.wav`);
-      console.log(`チャンク生成中: ${startTime}秒から`);
-
-      const command = `ffmpeg -y -i "${inputFile}" -ss ${startTime} -t ${CHUNK_SIZE} -ar 16000 -ac 1 -vn "${chunkFile}"`;
-      console.log('実行コマンド:', command);
-
-      const { stdout: ffmpegStdout, stderr: ffmpegStderr } = await execAsync(command);
-
-      if (ffmpegStderr) {
-        console.error('ffmpegエラー:', ffmpegStderr);
+    // RapidAPIを使用して字幕を取得
+    const response = await axios.get(`https://${RAPIDAPI_HOST}/api/transcript`, {
+      params: {
+        videoId: videoId,
+        lang: language === 'auto' ? 'ja' : language
+      },
+      headers: {
+        'X-RapidAPI-Key': RAPIDAPI_KEY,
+        'X-RapidAPI-Host': RAPIDAPI_HOST
       }
-
-      // チャンクファイルのサイズを確認
-      const stats = fs.statSync(chunkFile);
-      console.log(`チャンク生成完了: ${chunkFile} (${stats.size} bytes)`);
-
-      // 空のチャンクファイルを削除
-      if (stats.size === 0) {
-        fs.unlinkSync(chunkFile);
-        console.log('空のチャンクファイルを削除:', chunkFile);
-      } else {
-        chunks.push(chunkFile);
-      }
-
-      startTime += CHUNK_SIZE;
-    }
-
-    if (chunks.length === 0) {
-      throw new Error('有効なチャンクが生成されませんでした');
-    }
-
-    console.log('分割完了:', chunks.length, '個のチャンクを生成');
-    return chunks;
-  } catch (error) {
-    console.error('音声ファイルの分割中にエラー:', error);
-    throw error;
-  }
-}
-
-/**
- * 音声ファイルをトランスクリプションする
- */
-async function transcribeAudio(audioPath: string, language: string, jobId: string) {
-  try {
-    console.log('トランスクリプション開始:', audioPath);
-
-    // 音声ファイルを分割
-    const chunks = await splitAudio(audioPath);
-    console.log(`音声ファイルを${chunks.length}個のチャンクに分割しました`);
-
-    // 各チャンクを並列でトランスクリプション
-    const transcriptions = await Promise.all(
-      chunks.map(async (chunkPath, index) => {
-        console.log(`チャンク${index + 1}/${chunks.length}のトランスクリプション開始`);
-        const audioFile = fs.createReadStream(chunkPath);
-
-        try {
-          const transcription = await openai.audio.transcriptions.create({
-            file: audioFile,
-            model: 'whisper-1',
-            language: language === 'auto' ? undefined : language,
-            response_format: 'verbose_json',
-            timestamp_granularities: ['word', 'segment'],
-          });
-
-          console.log(`チャンク${index + 1}のトランスクリプション完了:`, {
-            textLength: transcription.text.length,
-            wordCount: transcription.words?.length || 0,
-            segmentCount: transcription.segments?.length || 0,
-          });
-
-          // 進捗を更新
-          const progress = 30 + Math.floor(((index + 1) / chunks.length) * 50);
-          updateJobStatus(jobId, {
-            status: 'transcribing',
-            progress,
-          });
-
-          return transcription;
-        } catch (error) {
-          console.error(`チャンク${index + 1}のトランスクリプション中にエラー:`, error);
-          throw error;
-        }
-      })
-    );
-
-    // チャンクを結合
-    const combinedTranscription = {
-      text: transcriptions.map((t) => t.text).join(' '),
-      words: transcriptions.flatMap((t, chunkIndex) => {
-        // 各チャンクの単語を適切に結合
-        const words = t.words || [];
-        const chunkOffset = chunkIndex * 600; // 各チャンクは600秒
-        return words
-          .map((word) => ({
-            word: word.word.trim(),
-            start: Math.round((word.start + chunkOffset) * 100) / 100, // 小数点2桁まで
-            end: Math.round((word.end + chunkOffset) * 100) / 100,
-          }))
-          .filter((word) => word.word.length > 0);
-      }),
-      segments: transcriptions.flatMap((t, chunkIndex) => {
-        // 各チャンクのセグメントを適切に結合
-        const segments = t.segments || [];
-        const chunkOffset = chunkIndex * 600;
-        return segments.map((segment) => ({
-          text: segment.text.trim(),
-          start: Math.round((segment.start + chunkOffset) * 100) / 100,
-          end: Math.round((segment.end + chunkOffset) * 100) / 100,
-        }));
-      }),
-    };
-
-    console.log('トランスクリプション完了:', {
-      totalTextLength: combinedTranscription.text.length,
-      totalWordCount: combinedTranscription.words.length,
-      totalSegmentCount: combinedTranscription.segments.length,
-      sampleWords: combinedTranscription.words.slice(0, 5),
-      sampleSegments: combinedTranscription.segments.slice(0, 3),
     });
 
+    if (!response.data || !response.data.transcript) {
+      throw new Error('字幕の取得に失敗しました');
+    }
+
+    // APIの応答をログ出力
+    console.log('RapidAPI Response:', JSON.stringify(response.data, null, 2));
+
+    // 進捗を更新
     updateJobStatus(jobId, {
       status: 'generating',
       progress: 80,
     });
 
-    return combinedTranscription;
+    // 字幕データの時間情報を修正
+    const transcript = response.data.transcript;
+    
+    // 時間情報を秒単位に変換
+    const processedTranscript = transcript.map((item: any) => {
+      // offsetとdurationから開始時間と終了時間を計算
+      const start = parseFloat(item.offset);
+      const end = start + parseFloat(item.duration);
+      
+      return {
+        text: item.text,
+        start,
+        end
+      };
+    });
+
+    // 動画の総再生時間を計算（最後の字幕の終了時間）
+    const totalDuration = processedTranscript[processedTranscript.length - 1].end;
+
+    return {
+      text: processedTranscript.map((item: any) => item.text).join(' '),
+      segments: processedTranscript
+    };
   } catch (error) {
-    console.error('音声のトランスクリプション中にエラーが発生しました:', error);
+    console.error('字幕の取得中にエラーが発生しました:', error);
     throw new Error(
-      `音声のトランスクリプションに失敗しました: ${error instanceof Error ? error.message : '不明なエラー'}`
+      `字幕の取得に失敗しました: ${error instanceof Error ? error.message : '不明なエラー'}`
     );
   }
+}
+
+/**
+ * YouTube URLからビデオIDを抽出する
+ */
+function extractVideoId(url: string): string | null {
+  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+  const match = url.match(regExp);
+  return (match && match[2].length === 11) ? match[2] : null;
 }
 
 /**
@@ -584,25 +358,29 @@ async function generateChapters(transcription: any): Promise<string> {
       .map((group, index) => {
         const summary = group.texts.join(' ').slice(0, 100) + '...';
         const startTime = Math.round(group.start * 100) / 100; // 小数点2桁まで
-        return `[${formatTime(startTime)}] ${summary}`;
+        return `${formatTime(startTime)} ${summary}`;
       })
       .join('\n');
 
     // GPT-4にチャプター生成を依頼
     const prompt = `以下の文字起こしから、重要な話題の切れ目を検出して${minChapters}〜${maxChapters}個のチャプターを生成してください。
-各チャプターは「MM:SS 章タイトル」の形式で、必ず00:00から始めてください。
-文字起こしの内容を要約し、最も重要なポイントを章タイトルとして抽出してください。
-話題の転換点を重視して、自然な区切りでチャプターを設定してください。
-等間隔ではなく、内容の流れに沿ってチャプターを設定してください。
-細かい話題の変化は無視し、大きな話題の転換点のみをチャプターとして設定してください。
-各セグメントの開始時間を正確に使用してください。
+動画の総再生時間は${formatTime(totalDuration)}です。
 
-文字起こし:
+文字起こし（時間と内容）:
 ${formattedSegments}
 
-チャプター形式:
-00:00 導入
-MM:SS 章タイトル
+上記の文字起こしから、以下のルールに従ってチャプターを生成してください：
+1. 各チャプターは「MM:SS 章タイトル」の形式で出力
+2. 必ず00:00から始める
+3. 最後のチャプターの時間は${formatTime(totalDuration)}を超えない
+4. 文字起こしの時間を参考に、話題の転換点でチャプターを設定
+5. 各セグメントの内容を要約して、適切な章タイトルを設定
+6. チャプター数は${minChapters}〜${maxChapters}個を目安に
+
+出力例：
+00:00 導入と自己紹介
+01:30 メインテーマの説明
+03:45 具体的な事例の紹介
 ...`;
 
     const completion = await openai.chat.completions.create({
@@ -611,12 +389,10 @@ MM:SS 章タイトル
         {
           role: 'system',
           content: `あなたは動画のチャプターを生成する専門家です。
-各セグメントの開始時間を参考に、重要な話題の転換点を重視してチャプターを設定してください。
-必ず「MM:SS 章タイトル」の形式で出力してください。
-チャプター数は${minChapters}〜${maxChapters}個を目安に、内容の流れに沿って自然な区切りで設定してください。
-等間隔ではなく、話題の切れ目を重視してください。
-細かい話題の変化は無視し、大きな話題の転換点のみをチャプターとして設定してください。
-各セグメントの開始時間を正確に使用してください。`,
+与えられた文字起こしから、時間と内容を考慮して適切なチャプターを生成してください。
+必ず「MM:SS 章タイトル」の形式で出力し、00:00から始めてください。
+動画の総再生時間（${formatTime(totalDuration)}）を超えないように注意してください。
+各セグメントの時間と内容を参考に、自然な話題の転換点でチャプターを設定してください。`,
         },
         { role: 'user', content: prompt },
       ],
