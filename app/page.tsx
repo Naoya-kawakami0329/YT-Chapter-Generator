@@ -142,7 +142,7 @@ export default function Home() {
 
       <footer className="py-6 border-t border-border">
         <div className="container mx-auto px-4 text-center text-sm text-muted-foreground">
-          <p>© 2025 YT-Chapter-Generator</p>
+          <p>© YT-Chapter-Generator</p>
         </div>
       </footer>
       <Toaster />
