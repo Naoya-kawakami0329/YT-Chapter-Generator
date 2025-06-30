@@ -142,10 +142,7 @@ export default function Home() {
 
       <footer className="py-6 border-t border-border">
         <div className="container mx-auto px-4 text-center text-sm text-muted-foreground">
-          <p>
-            © 2025 YT-Chapter-Generator | プライバシーは保護されます -
-            動画データは24時間後に自動削除されます
-          </p>
+          <p>© 2025 YT-Chapter-Generator</p>
         </div>
       </footer>
       <Toaster />

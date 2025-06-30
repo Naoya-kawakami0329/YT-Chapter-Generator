@@ -1,7 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { ProcessRequest, JobStatus } from '@/lib/types';
+import { JobStatus } from '@/lib/types';
 import OpenAI from 'openai';
 import axios from 'axios';
 import { updateJobStatus, storeJobResult, markJobAsError } from '@/lib/jobStore';
@@ -52,7 +52,6 @@ export async function processVideoAction(prevState: any, formData: FormData) {
       status: 'processing',
     };
   } catch (error) {
-    console.error('動画処理エラー:', error);
     return {
       success: false,
       error: error instanceof Error ? error.message : 'リクエストの処理に失敗しました',
@@ -77,7 +76,6 @@ export async function getJobStatusAction(jobId: string) {
       data: status,
     };
   } catch (error) {
-    console.error('ステータス取得エラー:', error);
     return {
       success: false,
       error: error instanceof Error ? error.message : 'ステータスの取得に失敗しました',
@@ -95,7 +93,6 @@ function generateJobId(): string {
 
 function processVideoAsync(url: string, language: string, jobId: string): void {
   processVideo(url, language, jobId).catch((error) => {
-    console.error(`ジョブ ${jobId} の処理中にエラーが発生しました:`, error);
     if (jobId) {
       markJobAsError(
         jobId,
@@ -111,7 +108,6 @@ async function processVideo(url: string, language: string, jobId: string): Promi
     const chapters = await generateChapters(transcription);
     storeJobResult(jobId, chapters);
   } catch (error) {
-    console.error(`ジョブ ${jobId} のビデオ処理中にエラーが発生しました:`, error);
     markJobAsError(jobId, error instanceof Error ? error.message : '処理中にエラーが発生しました');
     throw error;
   }
@@ -119,8 +115,6 @@ async function processVideo(url: string, language: string, jobId: string): Promi
 
 async function getYouTubeTranscript(url: string, language: string, jobId: string) {
   try {
-    console.log('字幕の取得を開始:', url);
-
     const videoId = extractVideoId(url);
     if (!videoId) {
       throw new Error('無効なYouTube URLです');
@@ -141,8 +135,6 @@ async function getYouTubeTranscript(url: string, language: string, jobId: string
       throw new Error('字幕の取得に失敗しました');
     }
 
-    console.log('RapidAPI Response:', JSON.stringify(response.data, null, 2));
-
     updateJobStatus(jobId, {
       status: 'generating',
       progress: 80,
@@ -161,14 +153,11 @@ async function getYouTubeTranscript(url: string, language: string, jobId: string
       };
     });
 
-    const totalDuration = processedTranscript[processedTranscript.length - 1].end;
-
     return {
       text: processedTranscript.map((item: any) => item.text).join(' '),
       segments: processedTranscript,
     };
   } catch (error) {
-    console.error('字幕の取得中にエラーが発生しました:', error);
     throw new Error(
       `字幕の取得に失敗しました: ${error instanceof Error ? error.message : '不明なエラー'}`
     );
@@ -204,7 +193,6 @@ async function generateChapters(transcription: any): Promise<string> {
     }
 
     const segments = transcription.segments || [];
-    const words = transcription.words || [];
 
     if (!Array.isArray(segments) || segments.length === 0) {
       throw new Error('トランスクリプションに有効なセグメントデータが含まれていません');
@@ -212,9 +200,6 @@ async function generateChapters(transcription: any): Promise<string> {
 
     const totalDuration = Math.ceil(segments[segments.length - 1].end);
     const { min: minChapters, max: maxChapters } = determineChapterCount(totalDuration);
-
-    console.log('動画の総再生時間:', formatTime(totalDuration));
-    console.log('チャプター設定:', { minChapters, maxChapters });
 
     const topicGroups: { start: number; texts: string[]; segments: any[] }[] = [];
     let currentGroup = {
@@ -275,8 +260,6 @@ async function generateChapters(transcription: any): Promise<string> {
       topicGroups.splice(mergeIndex + 1, 1);
     }
 
-    console.log('話題グループ数:', topicGroups.length);
-
     const formattedSegments = topicGroups
       .map((group, index) => {
         const summary = group.texts.join(' ').slice(0, 100) + '...';
@@ -327,14 +310,8 @@ ${formattedSegments}
       throw new Error('GPT-4からの応答が空でした');
     }
 
-    console.log('生成されたチャプター:', result);
     return result;
   } catch (error) {
-    console.error('チャプターの生成中にエラーが発生しました:', error);
-    if (error instanceof Error) {
-      console.error('エラーの詳細:', error.message);
-      console.error('スタックトレース:', error.stack);
-    }
     throw new Error(
       `チャプターの生成に失敗しました: ${error instanceof Error ? error.message : '不明なエラー'}`
     );
