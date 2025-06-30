@@ -155,7 +155,6 @@ async function processVideo(url: string, language: string, jobId: string): Promi
 
     // 結果を保存
     storeJobResult(jobId, chapters);
-
   } catch (error) {
     console.error(`ジョブ ${jobId} のビデオ処理中にエラーが発生しました:`, error);
     markJobAsError(jobId, error instanceof Error ? error.message : '処理中にエラーが発生しました');
@@ -180,12 +179,12 @@ async function getYouTubeTranscript(url: string, language: string, jobId: string
     const response = await axios.get(`https://${RAPIDAPI_HOST}/api/transcript`, {
       params: {
         videoId: videoId,
-        lang: language === 'auto' ? 'ja' : language
+        lang: language === 'auto' ? 'ja' : language,
       },
       headers: {
         'X-RapidAPI-Key': RAPIDAPI_KEY,
-        'X-RapidAPI-Host': RAPIDAPI_HOST
-      }
+        'X-RapidAPI-Host': RAPIDAPI_HOST,
+      },
     });
 
     if (!response.data || !response.data.transcript) {
@@ -203,17 +202,17 @@ async function getYouTubeTranscript(url: string, language: string, jobId: string
 
     // 字幕データの時間情報を修正
     const transcript = response.data.transcript;
-    
+
     // 時間情報を秒単位に変換
     const processedTranscript = transcript.map((item: any) => {
       // offsetとdurationから開始時間と終了時間を計算
       const start = parseFloat(item.offset);
       const end = start + parseFloat(item.duration);
-      
+
       return {
         text: item.text,
         start,
-        end
+        end,
       };
     });
 
@@ -222,7 +221,7 @@ async function getYouTubeTranscript(url: string, language: string, jobId: string
 
     return {
       text: processedTranscript.map((item: any) => item.text).join(' '),
-      segments: processedTranscript
+      segments: processedTranscript,
     };
   } catch (error) {
     console.error('字幕の取得中にエラーが発生しました:', error);
@@ -238,7 +237,7 @@ async function getYouTubeTranscript(url: string, language: string, jobId: string
 function extractVideoId(url: string): string | null {
   const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
   const match = url.match(regExp);
-  return (match && match[2].length === 11) ? match[2] : null;
+  return match && match[2].length === 11 ? match[2] : null;
 }
 
 /**

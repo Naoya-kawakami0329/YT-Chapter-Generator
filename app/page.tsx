@@ -97,12 +97,12 @@ export default function Home() {
     setStatus('processing');
     setProgress(0);
     setResult(null);
-    
+
     // 少し待ってからジョブIDをセットしてポーリング開始
     setTimeout(() => {
       setJobId(newJobId);
     }, 100);
-    
+
     toast({
       title: '処理開始',
       description: 'チャプターの生成を開始しました',
@@ -152,4 +152,3 @@ export default function Home() {
     </div>
   );
 }
-

@@ -83,11 +83,7 @@ export default function InputForm({ onJobStart }: InputFormProps) {
               </Select>
             </div>
 
-            {error && (
-              <div className="text-red-600 text-sm">
-                {error}
-              </div>
-            )}
+            {error && <div className="text-red-600 text-sm">{error}</div>}
 
             <Button
               type="submit"

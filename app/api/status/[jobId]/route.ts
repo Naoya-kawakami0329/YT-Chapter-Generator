@@ -13,10 +13,7 @@ const commonHeaders = {
 /**
  * ジョブのステータスを取得するAPIエンドポイント
  */
-export async function GET(
-  request: Request,
-  { params }: { params: Promise<{ jobId: string }> }
-) {
+export async function GET(request: Request, { params }: { params: Promise<{ jobId: string }> }) {
   try {
     // パラメータの検証
     const { jobId } = await params;
@@ -32,10 +29,10 @@ export async function GET(
     }
 
     console.log('ジョブステータスを取得中:', jobId);
-    
+
     try {
       const status = await getJobStatus(jobId);
-      
+
       if (!status) {
         console.log('ジョブが見つかりません:', jobId);
         return NextResponse.json(
@@ -52,9 +49,9 @@ export async function GET(
     } catch (dbError) {
       console.error('データベースアクセスエラー:', dbError);
       return NextResponse.json(
-        { 
+        {
           error: 'データベースアクセスエラー',
-          details: dbError instanceof Error ? dbError.message : '不明なエラー'
+          details: dbError instanceof Error ? dbError.message : '不明なエラー',
         },
         {
           status: 500,
@@ -65,9 +62,9 @@ export async function GET(
   } catch (error) {
     console.error('ステータス取得中にエラー:', error);
     return NextResponse.json(
-      { 
+      {
         error: 'ステータスの取得に失敗しました',
-        details: error instanceof Error ? error.message : '不明なエラー'
+        details: error instanceof Error ? error.message : '不明なエラー',
       },
       {
         status: 500,
