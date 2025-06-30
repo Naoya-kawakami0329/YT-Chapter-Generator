@@ -13,10 +13,13 @@ const commonHeaders = {
 /**
  * ジョブのステータスを取得するAPIエンドポイント
  */
-export async function GET(request: Request, context: any) {
+export async function GET(
+  request: Request,
+  { params }: { params: Promise<{ jobId: string }> }
+) {
   try {
     // パラメータの検証
-    const jobId = context?.params?.jobId;
+    const { jobId } = await params;
     if (!jobId) {
       console.error('ジョブIDが指定されていません');
       return NextResponse.json(

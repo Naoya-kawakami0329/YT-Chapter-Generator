@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useTransition } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -13,27 +13,27 @@ import {
 } from '@/components/ui/select';
 import { InfoIcon } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { processVideoAction } from '@/app/actions/video-actions';
 
 interface InputFormProps {
-  onSubmit: (url: string, language: string) => void;
+  onJobStart: (jobId: string) => void;
 }
 
-export default function InputForm({ onSubmit }: InputFormProps) {
-  const [url, setUrl] = useState('');
+export default function InputForm({ onJobStart }: InputFormProps) {
   const [language, setLanguage] = useState('ja');
-  const [isLoading, setIsLoading] = useState(false);
+  const [isPending, startTransition] = useTransition();
+  const [error, setError] = useState<string>('');
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoading(true);
-
-    try {
-      if (url) {
-        await onSubmit(url, language);
+  const handleSubmit = async (formData: FormData) => {
+    setError('');
+    startTransition(async () => {
+      const result = await processVideoAction(null, formData);
+      if (result.success && result.jobId) {
+        onJobStart(result.jobId);
+      } else {
+        setError(result.error || '処理に失敗しました');
       }
-    } finally {
-      setIsLoading(false);
-    }
+    });
   };
 
   return (
@@ -42,7 +42,7 @@ export default function InputForm({ onSubmit }: InputFormProps) {
         <div className="p-6 md:p-8">
           <h2 className="text-2xl font-bold text-center mb-6">YouTube チャプター生成</h2>
 
-          <form onSubmit={handleSubmit} className="space-y-6">
+          <form action={handleSubmit} className="space-y-6">
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label htmlFor="youtube-url">YouTube URL</Label>
@@ -61,9 +61,8 @@ export default function InputForm({ onSubmit }: InputFormProps) {
               </div>
               <Input
                 id="youtube-url"
+                name="url"
                 placeholder="https://www.youtube.com/watch?v=..."
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
                 className="bg-background"
                 required
               />
@@ -71,6 +70,7 @@ export default function InputForm({ onSubmit }: InputFormProps) {
 
             <div className="space-y-2">
               <Label htmlFor="language">言語</Label>
+              <input type="hidden" name="language" value={language} />
               <Select value={language} onValueChange={setLanguage}>
                 <SelectTrigger id="language" className="bg-background">
                   <SelectValue placeholder="言語を選択" />
@@ -83,12 +83,18 @@ export default function InputForm({ onSubmit }: InputFormProps) {
               </Select>
             </div>
 
+            {error && (
+              <div className="text-red-600 text-sm">
+                {error}
+              </div>
+            )}
+
             <Button
               type="submit"
               className="w-full bg-gradient-to-r from-red-600 to-red-500 hover:from-red-500 hover:to-red-400 transition-all"
-              disabled={isLoading || !url}
+              disabled={isPending}
             >
-              {isLoading ? 'Processing...' : 'チャプターを生成'}
+              {isPending ? 'Processing...' : 'チャプターを生成'}
             </Button>
           </form>
         </div>

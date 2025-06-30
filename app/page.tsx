@@ -26,27 +26,17 @@ export default function Home() {
       if (!jobId) return;
 
       try {
-        const response = await fetch(`/api/status/${jobId}`, {
-          headers: {
-            'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache',
-            'Accept': 'application/json',
-          },
-        });
+        const { getJobStatusAction } = await import('@/app/actions/video-actions');
+        const result = await getJobStatusAction(jobId);
 
-        let data;
-        const contentType = response.headers.get('content-type');
-        
-        try {
-          data = await response.json();
-        } catch (parseError) {
-          throw new Error('サーバーからの応答が不正な形式です');
+        if (!result.success) {
+          throw new Error(result.error || 'ステータスの取得に失敗しました');
         }
 
-        if (!response.ok) {
-          const errorMessage = data?.error || 'ステータスの取得に失敗しました';
-          const errorDetails = data?.details || '';
-          throw new Error(`${errorMessage}${errorDetails ? `: ${errorDetails}` : ''}`);
+        const data = result.data;
+
+        if (!data) {
+          throw new Error('データが取得できませんでした');
         }
 
         // ステータスとプログレスの更新
@@ -103,41 +93,20 @@ export default function Home() {
     };
   }, [jobId, status, progress, toast]);
 
-  const handleSubmit = async (url: string, language: string) => {
-    try {
-      setStatus('processing');
-      setProgress(0);
-      setResult(null);
-      setJobId(null);
-
-      const response = await fetch('/api/process', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ url, language }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || '処理の開始に失敗しました');
-      }
-
-      setJobId(data.jobId);
-      toast({
-        title: '処理開始',
-        description: 'チャプターの生成を開始しました',
-      });
-    } catch (error) {
-      setStatus('error');
-      setJobId(null);
-      toast({
-        title: 'エラー',
-        description: error instanceof Error ? error.message : '処理の開始に失敗しました',
-        variant: 'destructive',
-      });
-    }
+  const handleJobStart = (newJobId: string) => {
+    setStatus('processing');
+    setProgress(0);
+    setResult(null);
+    
+    // 少し待ってからジョブIDをセットしてポーリング開始
+    setTimeout(() => {
+      setJobId(newJobId);
+    }, 100);
+    
+    toast({
+      title: '処理開始',
+      description: 'チャプターの生成を開始しました',
+    });
   };
 
   return (
@@ -147,20 +116,20 @@ export default function Home() {
       <main className="flex-1 container mx-auto px-4 py-8">
         {status === 'idle' && (
           <div className="flex flex-col gap-8">
-            <InputForm onSubmit={handleSubmit} />
+            <InputForm onJobStart={handleJobStart} />
           </div>
         )}
 
         {status === 'done' && result && (
           <div className="flex flex-col gap-8">
-            <InputForm onSubmit={handleSubmit} />
+            <InputForm onJobStart={handleJobStart} />
             <ResultsArea result={result} setResult={setResult} />
           </div>
         )}
 
         {status === 'error' && (
           <div className="flex flex-col gap-8">
-            <InputForm onSubmit={handleSubmit} />
+            <InputForm onJobStart={handleJobStart} />
           </div>
         )}
 
